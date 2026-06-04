@@ -1,0 +1,41 @@
+name: Update Weather Outlook
+
+on:
+  schedule:
+    # Runs ~1.5h after each GFS run publishes (00Z/06Z/12Z/18Z + ~5h processing)
+    - cron: '0 5,11,17,23 * * *'
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install ecCodes system library
+        run: sudo apt-get install -y libeccodes-dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install matplotlib numpy requests eccodes scipy
+
+      - name: Generate outlook
+        run: python3 generate.py
+
+      - name: Commit and push updated index.html
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --staged --quiet || git commit -m "Update outlook $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
