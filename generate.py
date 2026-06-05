@@ -23,23 +23,56 @@ from matplotlib.path import Path
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GFS_BASE   = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+GFS_BASE = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
 GEOJSON_URLS = [
     "https://raw.githubusercontent.com/tonywr71/GeoJson-Data/master/australian-states.min.geojson",
     "https://raw.githubusercontent.com/rowanhogan/australian-states/master/states.min.geojson",
 ]
-AUS_BOUNDS   = (112.0, 154.5, -44.5, -9.5)   # lon_min, lon_max, lat_min, lat_max
+AUS_BOUNDS    = (112.0, 154.5, -44.5, -9.5)
 FORECAST_DAYS = 5
 
 HAZARDS = ["Wind", "Hail", "Flood", "Fire", "Tornado"]
+HAZARD_ICONS = {"Wind": "💨", "Hail": "🌨", "Flood": "🌊", "Fire": "🔥", "Tornado": "🌪"}
+
 RISK = {
-    0: ("NONE",  "#b0b8c0"),
-    1: ("MRGL",  "#4caf50"),
-    2: ("SLGT",  "#ffeb3b"),
-    3: ("ENH",   "#ff9800"),
-    4: ("MDT",   "#f44336"),
-    5: ("HIGH",  "#9c27b0"),
+    0: ("NONE", "#b0b8c0"),
+    1: ("MRGL", "#4caf50"),
+    2: ("SLGT", "#e6d800"),
+    3: ("ENH",  "#ff9800"),
+    4: ("MDT",  "#f44336"),
+    5: ("HIGH", "#9c27b0"),
 }
+
+# State label positions (lon, lat, abbrev)
+STATE_LABELS = [
+    (146.5, -32.0, "NSW"),
+    (144.5, -36.8, "VIC"),
+    (144.0, -22.0, "QLD"),
+    (135.5, -30.0, "SA"),
+    (121.0, -27.0, "WA"),
+    (133.5, -19.5, "NT"),
+    (146.5, -42.0, "TAS"),
+]
+
+# Australian regions for discussion generation
+# (name, lat_min, lat_max, lon_min, lon_max)
+AUS_REGIONS = [
+    ("Cape York",          -17, -10, 142, 154),
+    ("North QLD",          -23, -17, 138, 154),
+    ("SE QLD",             -29, -23, 148, 154),
+    ("Central QLD",        -26, -19, 138, 148),
+    ("Northern NSW",       -32, -28, 141, 154),
+    ("Southern NSW",       -37, -32, 141, 154),
+    ("Victoria",           -39, -34, 141, 150),
+    ("Tasmania",           -44, -39, 143, 149),
+    ("South Australia",    -38, -26, 129, 141),
+    ("Northern Territory", -26, -10, 129, 139),
+    ("Kimberley",          -20, -13, 124, 131),
+    ("Pilbara",            -24, -20, 114, 122),
+    ("SW Western Australia", -36, -28, 112, 122),
+    ("North Western Australia", -22, -13, 112, 124),
+    ("Central Australia",  -30, -22, 120, 138),
+]
 
 
 # ── GFS index helpers ─────────────────────────────────────────────────────────
@@ -49,17 +82,14 @@ def gfs_url(date_s, run_s, fhour, ext=""):
 
 
 def find_latest_run():
-    """Walk back through GFS run times until we find one with f024 ready."""
     now = datetime.utcnow()
-    for h_back in range(0, 30, 1):
-        dt   = now - timedelta(hours=h_back)
-        rh   = (dt.hour // 6) * 6
-        dt   = dt.replace(hour=rh, minute=0, second=0, microsecond=0)
-        ds   = dt.strftime("%Y%m%d")
-        rs   = f"{rh:02d}"
+    for h_back in range(0, 30):
+        dt = now - timedelta(hours=h_back)
+        rh = (dt.hour // 6) * 6
+        dt = dt.replace(hour=rh, minute=0, second=0, microsecond=0)
+        ds, rs = dt.strftime("%Y%m%d"), f"{rh:02d}"
         try:
-            resp = requests.head(gfs_url(ds, rs, 24, ".idx"), timeout=5)
-            if resp.status_code == 200:
+            if requests.head(gfs_url(ds, rs, 24, ".idx"), timeout=5).status_code == 200:
                 return ds, rs, dt
         except Exception:
             pass
@@ -67,18 +97,15 @@ def find_latest_run():
 
 
 def parse_idx(text):
-    """Parse GFS .idx into list of record dicts with byte ranges."""
     records = []
-    lines   = [l for l in text.strip().split("\n") if l]
+    lines = [l for l in text.strip().split("\n") if l]
     for i, line in enumerate(lines):
         parts = line.split(":")
         if len(parts) < 6:
             continue
-        start = int(parts[1])
-        end   = int(lines[i + 1].split(":")[1]) if i + 1 < len(lines) else None
         records.append({
-            "start": start,
-            "end":   end,
+            "start": int(parts[1]),
+            "end":   int(lines[i + 1].split(":")[1]) if i + 1 < len(lines) else None,
             "var":   parts[3],
             "level": parts[4],
             "time":  parts[5],
@@ -86,9 +113,7 @@ def parse_idx(text):
     return records
 
 
-def find_record(records, varname, level_substr=None, time_substr=None,
-                level_exclude=None):
-    """Return the first matching record, with optional string filters."""
+def find_record(records, varname, level_substr=None, time_substr=None, level_exclude=None):
     for rec in records:
         if rec["var"] != varname:
             continue
@@ -111,7 +136,6 @@ def download_range(url, start, end):
 
 
 def grib_to_aus(grib_bytes):
-    """Decode a GRIB2 message and return (lats, lons, 2D-values) for Australia."""
     gid = eccodes.codes_new_from_message(grib_bytes)
     try:
         ni   = eccodes.codes_get(gid, "Ni")
@@ -127,163 +151,222 @@ def grib_to_aus(grib_bytes):
     lats = np.linspace(lat1, lat2, nj)
     lons = np.linspace(lon1, lon2, ni)
     data = vals.reshape(nj, ni)
-
     lon_min, lon_max, lat_min, lat_max = AUS_BOUNDS
-    lat_mask = (lats >= lat_min) & (lats <= lat_max)
-    lon_mask = (lons >= lon_min) & (lons <= lon_max)
-    return lats[lat_mask], lons[lon_mask], data[np.ix_(lat_mask, lon_mask)]
+    return (lats[(lats >= lat_min) & (lats <= lat_max)],
+            lons[(lons >= lon_min) & (lons <= lon_max)],
+            data[np.ix_((lats >= lat_min) & (lats <= lat_max),
+                        (lons >= lon_min) & (lons <= lon_max))])
 
-
-def fetch_var(date_s, run_s, fhour, rec):
-    """Download one GRIB2 variable and return (lats, lons, grid) for Australia."""
-    url   = gfs_url(date_s, run_s, fhour)
-    raw   = download_range(url, rec["start"], rec["end"])
-    return grib_to_aus(raw)
-
-
-# ── Fetch one forecast day ────────────────────────────────────────────────────
-#
-# Variables:
-#   ugrd   UGRD  10 m above ground   → 10m wind U-component (m/s)
-#   vgrd   VGRD  10 m above ground   → 10m wind V-component (m/s)
-#   gust   GUST  surface              → surface wind gust (m/s)
-#   tmp2m  TMP   2 m above ground    → 2m air temperature (K)
-#   cape   CAPE  surface              → CAPE (J/kg)
-#   lftx   LFTX  surface              → surface lifted index (K)
-#   apcp   APCP  surface, "day acc"   → cumulative precipitation since run start (mm)
 
 VAR_SPECS = [
-    ("ugrd",  "UGRD", "10 m above ground", None,      None,      None),
-    ("vgrd",  "VGRD", "10 m above ground", None,      None,      None),
-    ("gust",  "GUST", "surface",           None,      None,      "PV="),
-    ("tmp2m", "TMP",  "2 m above ground",  None,      None,      None),
-    ("cape",  "CAPE", "surface",           None,      None,      None),
-    ("lftx",  "LFTX", "surface",           None,      None,      None),
-    ("apcp",  "APCP", "surface",           None,      "day acc", None),
+    ("ugrd",  "UGRD", "10 m above ground", None,      None),
+    ("vgrd",  "VGRD", "10 m above ground", None,      None),
+    ("gust",  "GUST", "surface",           "PV=",     None),
+    ("tmp2m", "TMP",  "2 m above ground",  None,      None),
+    ("cape",  "CAPE", "surface",           None,      None),
+    ("lftx",  "LFTX", "surface",           None,      None),
+    ("apcp",  "APCP", "surface",           None,      "day acc"),
 ]
 
 
 def fetch_day(date_s, run_s, fhour):
-    """Return (lats, lons, fields_dict) for one forecast time."""
-    url_idx = gfs_url(date_s, run_s, fhour, ".idx")
-    idx_text = requests.get(url_idx, timeout=15).text
+    idx_text = requests.get(gfs_url(date_s, run_s, fhour, ".idx"), timeout=15).text
     records  = parse_idx(idx_text)
-
     lats = lons = None
     fields = {}
-    for key, var, lev_sub, lev_exc_none, time_sub, lev_exc in VAR_SPECS:
-        rec = find_record(records, var,
-                          level_substr=lev_sub,
-                          time_substr=time_sub,
-                          level_exclude=lev_exc)
+    for key, var, lev_sub, lev_exc, time_sub in VAR_SPECS:
+        rec = find_record(records, var, level_substr=lev_sub,
+                          time_substr=time_sub, level_exclude=lev_exc)
         if rec is None:
-            print(f"    [{key}] not found", flush=True)
             fields[key] = None
             continue
         try:
-            l, o, g = fetch_var(date_s, run_s, fhour, rec)
+            url = gfs_url(date_s, run_s, fhour)
+            l, o, g = grib_to_aus(download_range(url, rec["start"], rec["end"]))
             if lats is None:
                 lats, lons = l, o
             fields[key] = g
             print(".", end="", flush=True)
         except Exception as e:
-            print(f"  ![{key}: {e}]", end="", flush=True)
+            print(f"![{key}:{e}]", end="", flush=True)
             fields[key] = None
-
     return lats, lons, fields
 
 
 # ── Risk calculations ─────────────────────────────────────────────────────────
-def zeros_like(fields):
-    for v in fields.values():
-        if v is not None:
-            return np.zeros(v.shape, dtype=int)
-    return np.zeros((141, 171), dtype=int)
-
-
 def compute_risks(fields, prev_apcp=None):
-    """Return dict hazard→2D risk array (0-5) from raw GFS fields."""
-
     def f(key):
         v = fields.get(key)
-        return v if v is not None else np.zeros_like(zeros_like(fields), dtype=float)
+        fallback = next((x for x in fields.values() if x is not None), np.zeros((141, 171)))
+        return v if v is not None else np.zeros(fallback.shape)
 
-    ugrd = f("ugrd")
-    vgrd = f("vgrd")
-    gust = f("gust")
-    tmp  = f("tmp2m") - 273.15          # K to C
-    cape = f("cape")
-    lftx = f("lftx")
+    ugrd, vgrd = f("ugrd"), f("vgrd")
+    gust  = f("gust")
+    tmp   = f("tmp2m") - 273.15
+    cape  = f("cape")
+    lftx  = f("lftx")
 
-    # Cumulative APCP in mm; subtract previous day to get daily total
     apcp_cum = f("apcp")
-    if prev_apcp is not None:
-        daily_precip = np.maximum(0.0, apcp_cum - prev_apcp)
-    else:
-        daily_precip = apcp_cum
+    daily_precip = (np.maximum(0.0, apcp_cum - prev_apcp)
+                    if prev_apcp is not None else apcp_cum)
 
-    wind_ms  = np.sqrt(ugrd**2 + vgrd**2)
-    wind_kph = wind_ms * 3.6
+    wind_kph = np.sqrt(ugrd**2 + vgrd**2) * 3.6
     gust_kph = gust * 3.6
-
-    # Precipitation probability proxy (0-100)
     precip_prob = np.clip(daily_precip / 0.15, 0, 95)
 
-    # Wind
     wr = np.zeros(wind_kph.shape, dtype=int)
-    for thr, lvl in [(35,1),(46,2),(58,3),(72,4),(90,5)]:
-        wr[wind_kph >= thr] = lvl
+    for t, l in [(35,1),(46,2),(58,3),(72,4),(90,5)]:
+        wr[wind_kph >= t] = l
     gr = np.zeros_like(wr)
-    for thr, lvl in [(44,1),(60,2),(75,3),(95,4),(120,5)]:
-        gr[gust_kph >= thr] = lvl
+    for t, l in [(44,1),(60,2),(75,3),(95,4),(120,5)]:
+        gr[gust_kph >= t] = l
     wind_risk = np.maximum(wr, gr)
 
-    # Hail
     hail_risk = np.zeros(cape.shape, dtype=int)
-    for (c_thr, p_thr), lvl in [
-        ((300,  20), 1),
-        ((700,  30), 2),
-        ((1300, 40), 3),
-        ((2000, 50), 4),
-        ((2800, 60), 5),
-    ]:
-        hail_risk[(cape >= c_thr) & (precip_prob >= p_thr)] = lvl
+    for (c, p), l in [((300,20),1),((700,30),2),((1300,40),3),((2000,50),4),((2800,60),5)]:
+        hail_risk[(cape >= c) & (precip_prob >= p)] = l
 
-    # Flood
     flood_risk = np.zeros(daily_precip.shape, dtype=int)
-    for thr, lvl in [(10,1),(25,2),(50,3),(100,4),(150,5)]:
-        flood_risk[daily_precip >= thr] = lvl
+    for t, l in [(10,1),(25,2),(50,3),(100,4),(150,5)]:
+        flood_risk[daily_precip >= t] = l
 
-    # Fire
     fwi = (tmp - 15.0) * 1.8 + wind_kph * 0.9
     fire_risk = np.zeros(fwi.shape, dtype=int)
-    for thr, lvl in [(8,1),(20,2),(38,3),(58,4),(80,5)]:
-        fire_risk[fwi >= thr] = lvl
+    for t, l in [(8,1),(20,2),(38,3),(58,4),(80,5)]:
+        fire_risk[fwi >= t] = l
     fire_risk[daily_precip >= 3] = 0
 
-    # Tornado
     tor_risk = np.zeros(cape.shape, dtype=int)
-    for (c_thr, li_thr, g_thr, p_thr), lvl in [
-        ((600,  -2,   0,  0),  1),
-        ((1200, -3,   0, 30),  2),
-        ((2000, -4,  55, 40),  3),
-        ((3000, -5,  75,  0),  4),
+    for (c, li, g, p), l in [
+        ((600,-2,0,0),1), ((1200,-3,0,30),2),
+        ((2000,-4,55,40),3), ((3000,-5,75,0),4)
     ]:
-        mask = (cape >= c_thr) & (lftx <= li_thr)
-        if g_thr:  mask &= (gust_kph >= g_thr)
-        if p_thr:  mask &= (precip_prob >= p_thr)
-        tor_risk[mask] = lvl
+        mask = (cape >= c) & (lftx <= li)
+        if g: mask &= (gust_kph >= g)
+        if p: mask &= (precip_prob >= p)
+        tor_risk[mask] = l
 
-    return {
-        "Wind":    wind_risk,
-        "Hail":    hail_risk,
-        "Flood":   flood_risk,
-        "Fire":    fire_risk,
-        "Tornado": tor_risk,
-    }
+    return {"Wind": wind_risk, "Hail": hail_risk,
+            "Flood": flood_risk, "Fire": fire_risk, "Tornado": tor_risk}
 
 
-# ── Map data ──────────────────────────────────────────────────────────────────
+# ── Discussion generation ──────────────────────────────────────────────────────
+def region_risks(risk_grid, lats, lons):
+    results = []
+    for name, lat_min, lat_max, lon_min, lon_max in AUS_REGIONS:
+        lm = (lats >= lat_min) & (lats <= lat_max)
+        om = (lons >= lon_min) & (lons <= lon_max)
+        if lm.any() and om.any():
+            mx = int(risk_grid[np.ix_(lm, om)].max())
+            if mx >= 1:
+                results.append((name, mx))
+    return sorted(results, key=lambda x: -x[1])
+
+
+def top_regions(risk_grid, lats, lons, min_risk=2, n=4):
+    return [r[0] for r in region_risks(risk_grid, lats, lons) if r[1] >= min_risk][:n]
+
+
+def _fmt_regions(names):
+    if not names:
+        return "isolated areas"
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+DISC_TEMPLATES = {
+    "Wind": {
+        0: "No significant wind risk forecast for this period.",
+        1: "Marginal wind risk across {r}. Isolated gusts to 50-60 km/h possible.",
+        2: "Slight wind risk across {r}. Gusty conditions with gusts reaching 60-75 km/h are possible, particularly in elevated areas and along exposed coastlines.",
+        3: "Enhanced wind risk across {r}. Damaging gusts of 80-95 km/h are forecast, likely associated with a frontal system or strong pressure gradient. Structural damage and fallen trees are possible.",
+        4: "Dangerous wind conditions forecast across {r}. Destructive gusts to 100-120 km/h likely in exposed locations. Significant property damage is possible - secure outdoor items and check with your local emergency services.",
+        5: "Extreme wind event forecast across {r}. Life-threatening gusts exceeding 120 km/h anticipated. Avoid all unnecessary travel. Take shelter in a sturdy building away from windows.",
+    },
+    "Hail": {
+        0: "No significant hail risk forecast.",
+        1: "Marginal hail risk across {r}. Isolated thunderstorms with small hail are possible.",
+        2: "Slight hail risk across {r}. Isolated thunderstorms capable of producing small to moderate hail are possible where instability increases.",
+        3: "Enhanced hail risk across {r}. Elevated CAPE values support severe thunderstorm development. Large hail (2-4 cm) is possible with the most organised storms.",
+        4: "Significant hail risk across {r}. High CAPE combined with wind shear creates an environment favourable for supercells. Large to very large hail (4-6 cm) is possible.",
+        5: "Extreme hail risk across {r}. Supercell thunderstorms capable of producing giant hail (>6 cm) are possible. Protect vehicles and seek shelter indoors.",
+    },
+    "Flood": {
+        0: "No significant flooding risk forecast.",
+        1: "Marginal flooding risk across {r}. Rainfall of 10-25 mm possible with minor flooding in low-lying areas.",
+        2: "Slight flooding risk across {r}. Rainfall accumulations of 25-50 mm forecast, with localised flash flooding possible in low-lying areas and smaller catchments.",
+        3: "Enhanced flooding risk across {r}. Moderate to heavy rainfall of 50-100 mm expected. Flash flooding is likely in susceptible areas; rivers may rise. Do not drive through floodwater.",
+        4: "Significant flooding risk across {r}. Rainfall accumulations of 100-150 mm forecast, likely causing major flash and river flooding. Evacuation of some areas may be required.",
+        5: "Catastrophic flooding forecast across {r}. Extreme rainfall of 150+ mm anticipated. Life-threatening flash and river flooding likely. Follow all emergency directions immediately.",
+    },
+    "Fire": {
+        0: "No significant fire weather risk forecast. Moist conditions and moderate temperatures prevail.",
+        1: "Marginal fire weather risk across {r}. Warm, dry conditions with moderate winds keep fire danger slightly elevated. Exercise caution with ignition sources.",
+        2: "Slight fire weather risk across {r}. Above-average temperatures combined with moderate winds and low humidity could support fire spread if ignition occurs.",
+        3: "Enhanced fire weather risk across {r}. Elevated temperatures, dry conditions and strong winds will elevate fire danger. Avoid burning off and check local fire restrictions.",
+        4: "Severe fire weather conditions forecast across {r}. Combination of very high temperatures, critically low humidity and strong winds creates a dangerous fire environment. Total Fire Bans likely.",
+        5: "Catastrophic fire weather conditions across {r}. Any fires that start will be extremely difficult to control and may threaten lives and homes. Do not wait to be told to leave - have your bushfire plan ready.",
+    },
+    "Tornado": {
+        0: "No significant tornado risk forecast.",
+        1: "Marginal tornado risk across {r}. Weak tornadoes or gustnadoes cannot be ruled out with any convective activity in the region.",
+        2: "Slight tornado risk across {r}. Isolated rotating thunderstorms are possible given marginal instability and wind shear. Short-lived weak tornadoes are possible.",
+        3: "Enhanced tornado risk across {r}. CAPE and wind shear profiles are conducive to rotating thunderstorms. Well-organised supercells capable of tornadoes are possible.",
+        4: "Significant tornado risk across {r}. Exceptionally high CAPE combined with strong directional wind shear creates a rare severe tornado environment for Australia. Long-track tornadoes are possible.",
+        5: "Extreme tornado risk across {r}. This is a rare and dangerous severe weather setup. Violent, long-track tornadoes are possible. Take shelter in an interior room on the lowest floor of a sturdy building.",
+    },
+}
+
+
+def generate_discussion(risks, lats, lons):
+    out = {}
+    for h in HAZARDS:
+        mx = int(risks[h].max())
+        regions = top_regions(risks[h], lats, lons, min_risk=max(1, mx - 1))
+        r_str = _fmt_regions(regions)
+        text = DISC_TEMPLATES[h][mx].format(r=r_str)
+        out[h] = {"max_risk": mx, "regions": regions[:3], "text": text}
+    return out
+
+
+def synoptic_overview(risks, lats, lons):
+    def regional_max(risk_grid, lat_min, lat_max, lon_min, lon_max):
+        lm = (lats >= lat_min) & (lats <= lat_max)
+        om = (lons >= lon_min) & (lons <= lon_max)
+        return int(risk_grid[np.ix_(lm, om)].max()) if lm.any() and om.any() else 0
+
+    se_wind  = regional_max(risks["Wind"],  -40, -33, 140, 154)
+    se_flood = regional_max(risks["Flood"], -40, -33, 140, 154)
+    n_fire   = regional_max(risks["Fire"],  -25, -10, 125, 155)
+    instab   = int(risks["Hail"].max())
+    tor      = int(risks["Tornado"].max())
+
+    features = []
+    if se_wind >= 3 or se_flood >= 3:
+        features.append("an active frontal system tracking across southeastern Australia")
+    if n_fire >= 3:
+        features.append("dry season fire weather conditions across the tropical north")
+    if instab >= 3:
+        features.append("elevated atmospheric instability supporting severe thunderstorm development")
+    if tor >= 3:
+        features.append("strong convective wind shear increasing the tornado threat")
+    if int(risks["Flood"].max()) >= 4:
+        features.append("a significant rainfall event driving flooding concerns")
+
+    if not features:
+        max_overall = max(int(risks[h].max()) for h in HAZARDS)
+        if max_overall <= 1:
+            return "A relatively quiet weather pattern is forecast. No major severe weather systems are expected, though isolated hazards may persist in some regions."
+        return "A broadly benign pattern is expected, though localised hazards remain possible across parts of the continent."
+
+    if len(features) == 1:
+        return f"The primary weather driver for this period is {features[0]}."
+    joined = "; ".join(features[:-1]) + f"; and {features[-1]}"
+    return f"The forecast period is characterised by {joined}."
+
+
+# ── Map geometry ────────────────────────────────────────────────────────────────
 def fetch_geojson():
     for url in GEOJSON_URLS:
         try:
@@ -320,7 +403,7 @@ def polys_to_clip_path(polys):
     return Path(verts, codes) if verts else None
 
 
-# ── Rendering ─────────────────────────────────────────────────────────────────
+# ── Map rendering ──────────────────────────────────────────────────────────────
 CMAP = mcolors.ListedColormap([RISK[i][1] for i in range(6)])
 NORM = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5], CMAP.N)
 LON0, LON1, LAT0, LAT1 = AUS_BOUNDS
@@ -336,13 +419,13 @@ def draw_panel(ax, lats, lons, risk_grid, title, polys, clip_path):
     if polys:
         ax.add_collection(PatchCollection(
             [Polygon(p, closed=True) for p in polys],
-            facecolor="#2c3e50", edgecolor="none", zorder=1,
+            facecolor="#253545", edgecolor="none", zorder=1,
         ))
 
     GL, GLatG = np.meshgrid(lons, lats)
     cf = ax.contourf(GL, GLatG, risk_grid,
                      levels=[-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
-                     cmap=CMAP, norm=NORM, alpha=0.82, zorder=2)
+                     cmap=CMAP, norm=NORM, alpha=0.85, zorder=2)
 
     if clip_path is not None:
         cp = PathPatch(clip_path, transform=ax.transData, visible=False)
@@ -352,37 +435,43 @@ def draw_panel(ax, lats, lons, risk_grid, title, polys, clip_path):
     if polys:
         ax.add_collection(PatchCollection(
             [Polygon(p, closed=True) for p in polys],
-            facecolor="none", edgecolor="#5a8faa", linewidth=0.5, zorder=4,
+            facecolor="none", edgecolor="#4a7a96", linewidth=0.6, zorder=4,
         ))
+
+    for lon, lat, abbrev in STATE_LABELS:
+        ax.text(lon, lat, abbrev, fontsize=5.5, color="#6aaccc",
+                ha="center", va="center", zorder=5, fontfamily="monospace",
+                fontweight="bold", alpha=0.75,
+                path_effects=[pe.withStroke(linewidth=1.5, foreground="#1a2e40")])
 
     ax.set_title(title.upper(), fontsize=9, fontweight="bold",
                  color="#cce8ff", pad=3, fontfamily="monospace")
 
 
-def render_day(lats, lons, risk_grids, date_label, polys, clip_path):
-    fig = plt.figure(figsize=(21, 5.8), facecolor="#0c1824")
-    fig.text(0.5, 0.966,
+def render_day_image(lats, lons, risk_grids, date_label, polys, clip_path):
+    fig = plt.figure(figsize=(22, 5.6), facecolor="#0c1824")
+    fig.text(0.5, 0.975,
              f"AUSTRALIA SEVERE WEATHER OUTLOOK  ·  {date_label}",
-             ha="center", va="top", fontsize=13, fontweight="bold",
+             ha="center", va="top", fontsize=12, fontweight="bold",
              color="white", fontfamily="monospace",
              path_effects=[pe.withStroke(linewidth=3, foreground="#0c1824")])
 
-    panel_w = 0.189
+    panel_w = 0.188
     for i, hazard in enumerate(HAZARDS):
-        x0 = 0.005 + i * (panel_w + 0.006)
-        ax = fig.add_axes([x0, 0.075, panel_w, 0.855])
+        x0 = 0.006 + i * (panel_w + 0.006)
+        ax = fig.add_axes([x0, 0.06, panel_w, 0.875])
         draw_panel(ax, lats, lons, risk_grids[hazard], hazard, polys, clip_path)
 
-    lax = fig.add_axes([0.005, 0.005, 0.99, 0.060])
+    lax = fig.add_axes([0.006, 0.005, 0.988, 0.050])
     lax.axis("off")
-    lax.set_facecolor("#060e16")
+    lax.set_facecolor("#06101a")
     for i in range(6):
         label, color = RISK[i]
         x = 0.005 + i * 0.165
-        lax.add_patch(plt.Rectangle((x, 0.07), 0.15, 0.86,
+        lax.add_patch(plt.Rectangle((x, 0.05), 0.155, 0.90,
                                      color=color, transform=lax.transAxes, clip_on=False))
         fc = "black" if i < 3 else "white"
-        lax.text(x + 0.075, 0.50, label, ha="center", va="center",
+        lax.text(x + 0.077, 0.52, label, ha="center", va="center",
                  fontsize=8, fontweight="bold", color=fc,
                  fontfamily="monospace", transform=lax.transAxes)
 
@@ -395,56 +484,230 @@ def render_day(lats, lons, risk_grids, date_label, polys, clip_path):
     return b64
 
 
-# ── HTML ──────────────────────────────────────────────────────────────────────
-def make_html(images, dates, run_label):
-    labels = ["TODAY", "TOMORROW", "DAY 3", "DAY 4", "DAY 5"]
-    blocks = "\n".join(
-        f'  <div class="day">\n'
-        f'    <div class="day-hdr">{labels[i]} &mdash; {dates[i]}</div>\n'
-        f'    <img src="data:image/png;base64,{img}" alt="{dates[i]}">\n'
-        f'  </div>'
-        for i, img in enumerate(images)
+# ── HTML generation ─────────────────────────────────────────────────────────────────
+HTML_CSS = """
+:root {
+  --bg:      #0a1520;
+  --bg2:     #0e1e2e;
+  --bg3:     #142030;
+  --bg4:     #1a2a3c;
+  --border:  #1c3550;
+  --border2: #254060;
+  --text:    #b0ccde;
+  --text2:   #d8eaf8;
+  --dim:     #4a7090;
+  --accent:  #4a9ed0;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+header {
+  background: linear-gradient(180deg, #060e18 0%, #0c1a28 100%);
+  border-bottom: 2px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.hdr-title h1 { font-size: 18px; color: var(--text2); letter-spacing: 3px; font-weight: bold; }
+.hdr-title .subtitle { color: var(--dim); font-size: 10px; letter-spacing: 2px; margin-top: 3px; }
+.hdr-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+.meta-item { text-align: right; }
+.meta-label { font-size: 9px; color: var(--dim); letter-spacing: 2px; }
+.meta-value { font-size: 11px; color: var(--accent); margin-top: 1px; }
+.tab-bar {
+  background: var(--bg2);
+  border-bottom: 2px solid var(--border);
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tab-bar::-webkit-scrollbar { height: 4px; }
+.tab-bar::-webkit-scrollbar-track { background: var(--bg2); }
+.tab-bar::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+.tab {
+  flex: 1; min-width: 110px; padding: 10px 14px;
+  background: none; border: none; border-right: 1px solid var(--border);
+  color: var(--dim); font-family: inherit; font-size: 11px; font-weight: bold;
+  letter-spacing: 1px; cursor: pointer; transition: background 0.15s, color 0.15s;
+  text-align: center;
+}
+.tab:hover { background: var(--bg3); color: var(--text); }
+.tab.active { background: var(--bg3); color: var(--text2); border-bottom: 3px solid var(--accent); }
+.tab .tab-day  { display: block; font-size: 11px; letter-spacing: 1px; }
+.tab .tab-date { display: block; font-size: 9px; color: var(--dim); margin-top: 2px; font-weight: normal; }
+.tab .tab-top  {
+  display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+  margin-left: 5px; vertical-align: middle; position: relative; top: -1px;
+}
+.tab.active .tab-date { color: #7aaccc; }
+.day-panel { display: none; }
+.day-panel.active { display: block; }
+.badge-row {
+  display: flex; gap: 8px; padding: 10px 12px;
+  background: var(--bg2); border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.badge {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 4px; padding: 5px 10px; min-width: 180px; flex: 1;
+}
+.badge-icon { font-size: 14px; }
+.badge-name { font-size: 10px; font-weight: bold; letter-spacing: 1px; color: var(--text); min-width: 55px; }
+.badge-level { font-size: 9px; font-weight: bold; padding: 2px 6px; border-radius: 3px; letter-spacing: 1px; white-space: nowrap; }
+.badge-regions { font-size: 9px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.maps-wrap { padding: 10px 12px 4px; background: var(--bg2); }
+.maps-wrap img { width: 100%; display: block; border: 1px solid var(--border); border-radius: 3px; }
+.discussion { margin: 10px 12px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; overflow: hidden; }
+.disc-header {
+  background: var(--bg2); border-bottom: 1px solid var(--border2);
+  padding: 8px 14px; font-size: 11px; font-weight: bold;
+  color: var(--text2); letter-spacing: 2px; display: flex; align-items: center; gap: 8px;
+}
+.disc-synoptic {
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text2); line-height: 1.6; font-style: italic;
+}
+.disc-hazards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.disc-hazard {
+  padding: 10px 14px;
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.disc-hazard:last-child { border-right: none; }
+.disc-hazard-hdr { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.disc-hazard-icon { font-size: 13px; }
+.disc-hazard-name { font-size: 10px; font-weight: bold; letter-spacing: 1px; color: var(--text2); }
+.disc-hazard-level { font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 2px; margin-left: auto; letter-spacing: 1px; }
+.disc-hazard-text { font-size: 11px; color: var(--text); line-height: 1.55; }
+.disc-hazard-text strong { color: var(--text2); }
+.legend {
+  display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+  background: var(--bg2); border-top: 1px solid var(--border); flex-wrap: wrap;
+}
+.legend-label { font-size: 9px; color: var(--dim); letter-spacing: 2px; margin-right: 4px; }
+.legend-item { display: flex; align-items: center; gap: 4px; font-size: 9px; letter-spacing: 1px; }
+.legend-swatch { width: 18px; height: 14px; border-radius: 2px; }
+.legend-item span { color: var(--dim); }
+footer { text-align: center; padding: 10px; font-size: 10px; color: var(--dim); border-top: 1px solid var(--border); letter-spacing: 1px; }
+footer a { color: #3a7090; text-decoration: none; }
+footer a:hover { color: var(--accent); }
+@media (max-width: 700px) {
+  .hdr-title h1 { font-size: 14px; letter-spacing: 1px; }
+  .hdr-meta { display: none; }
+  .badge { min-width: 140px; }
+  .disc-hazards { grid-template-columns: 1fr; }
+}
+"""
+
+HTML_JS = """
+function showDay(n) {
+  document.querySelectorAll('.day-panel').forEach((p, i) => p.classList.toggle('active', i === n));
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === n));
+  history.replaceState(null, '', '#day' + n);
+}
+(function() { var m = location.hash.match(/#day(\\d)/); showDay(m ? parseInt(m[1]) : 0); })();
+"""
+
+
+def make_html(images, day_metas, dates, run_label, timestamp):
+    day_labels = ["TODAY", "TOMORROW", "DAY 3", "DAY 4", "DAY 5"]
+    short_dates = [(datetime.strptime(d, "%A, %d %b %Y")).strftime("%a %d %b") for d in dates]
+
+    tabs = []
+    for i, (label, short) in enumerate(zip(day_labels, short_dates)):
+        top_risk = max(meta["max_risk"] for k, meta in day_metas[i].items() if k != "_synoptic")
+        _, dot_color = RISK[top_risk]
+        tabs.append(
+            f'<button class="tab" onclick="showDay({i})">' +
+            f'<span class="tab-day">{label}<span class="tab-top" style="background:{dot_color}"></span></span>' +
+            f'<span class="tab-date">{short}</span></button>'
+        )
+
+    panels = []
+    for i, (img, metas, date_str) in enumerate(zip(images, day_metas, dates)):
+        badges = []
+        for h in HAZARDS:
+            meta = metas[h]
+            mx = meta["max_risk"]
+            lbl, color = RISK[mx]
+            fg = "black" if mx < 3 else "white"
+            region_str = " · ".join(meta["regions"][:2]) if meta["regions"] else "—"
+            badges.append(
+                f'<div class="badge"><span class="badge-icon">{HAZARD_ICONS[h]}</span>' +
+                f'<span class="badge-name">{h.upper()}</span>' +
+                f'<span class="badge-level" style="background:{color};color:{fg}">{lbl}</span>' +
+                f'<span class="badge-regions">{region_str}</span></div>'
+            )
+
+        hazard_cards = []
+        for h in HAZARDS:
+            meta = metas[h]
+            mx = meta["max_risk"]
+            lbl, color = RISK[mx]
+            fg = "black" if mx < 3 else "white"
+            hazard_cards.append(
+                f'<div class="disc-hazard"><div class="disc-hazard-hdr">' +
+                f'<span class="disc-hazard-icon">{HAZARD_ICONS[h]}</span>' +
+                f'<span class="disc-hazard-name">{h.upper()}</span>' +
+                f'<span class="disc-hazard-level" style="background:{color};color:{fg}">{lbl}</span>' +
+                f'</div><div class="disc-hazard-text">{metas[h]["text"]}</div></div>'
+            )
+
+        panels.append(
+            f'<div class="day-panel" id="day{i}">' +
+            f'<div class="badge-row">{"" .join(badges)}</div>' +
+            f'<div class="maps-wrap"><img src="data:image/png;base64,{img}" alt="{date_str}"></div>' +
+            f'<div class="discussion">' +
+            f'<div class="disc-header">\U0001f4cb FORECAST DISCUSSION · {date_str.upper()}</div>' +
+            f'<div class="disc-synoptic">{metas["_synoptic"]}</div>' +
+            f'<div class="disc-hazards">{"" .join(hazard_cards)}</div>' +
+            f'</div></div>'
+        )
+
+    legend_items = "".join(
+        f'<div class="legend-item"><div class="legend-swatch" style="background:{RISK[i][1]}"></div><span>{RISK[i][0]}</span></div>'
+        for i in range(6)
     )
-    return f"""\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Australia Severe Weather Outlook</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#0b1520;color:#adc8e0;font-family:"Courier New",monospace;font-size:13px}}
-header{{background:#070f18;padding:14px 22px;border-bottom:2px solid #18304a}}
-h1{{font-size:17px;color:#6aacde;letter-spacing:3px}}
-.sub{{color:#365870;margin-top:5px;font-size:10px;letter-spacing:1px}}
-.days{{padding:14px 10px;max-width:1700px;margin:0 auto}}
-.day{{margin-bottom:18px}}
-.day-hdr{{color:#4a8ab8;font-size:11px;letter-spacing:2px;margin-bottom:5px;padding-left:2px}}
-.day img{{width:100%;display:block;border:1px solid #18304a;border-radius:2px}}
-footer{{text-align:center;padding:9px;font-size:10px;color:#28506a;
-        border-top:1px solid #18304a;margin-top:8px}}
-footer a{{color:#285870;text-decoration:none}}
-</style>
-</head>
-<body>
-<header>
-  <h1>&#9928; AUSTRALIA SEVERE WEATHER OUTLOOK</h1>
-  <div class="sub">GENERATED {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")} &nbsp;&bull;&nbsp; {run_label} &nbsp;&bull;&nbsp; WIND / HAIL / FLOOD / FIRE / TORNADO</div>
-</header>
-<div class="days">
-{blocks}
-</div>
-<footer>NOT FOR OPERATIONAL USE &nbsp;&bull;&nbsp; For official warnings visit <a href="https://www.bom.gov.au">bom.gov.au</a></footer>
-</body>
-</html>"""
+
+    return (
+        '<!DOCTYPE html><html lang="en"><head>\n'
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">\n'
+        '<title>Australia Severe Weather Outlook</title>\n'
+        f'<style>{HTML_CSS}</style>\n</head><body>\n'
+        '<header>\n'
+        '  <div class="hdr-title">\n'
+        '  <h1>&#9928; AUSTRALIA SEVERE WEATHER OUTLOOK</h1>\n'
+        '  <div class="subtitle">5-DAY RISK FORECAST &nbsp;&bull;&nbsp; WIND &nbsp;&bull;&nbsp; HAIL &nbsp;&bull;&nbsp; FLOOD &nbsp;&bull;&nbsp; FIRE &nbsp;&bull;&nbsp; TORNADO</div>\n'
+        '  </div>\n'
+        '  <div class="hdr-meta">\n'
+        f'    <div class="meta-item"><div class="meta-label">DATA SOURCE</div><div class="meta-value">{run_label}</div></div>\n'
+        f'    <div class="meta-item"><div class="meta-label">GENERATED</div><div class="meta-value">{timestamp} UTC</div></div>\n'
+        '  </div>\n'
+        '</header>\n'
+        f'<div class="tab-bar">{"" .join(tabs)}</div>\n'
+        + "".join(panels) +
+        f'<div class="legend"><span class="legend-label">RISK SCALE</span>{legend_items}</div>\n'
+        '<footer>NOT FOR OPERATIONAL USE &nbsp;&bull;&nbsp; '
+        'For official warnings visit <a href="https://www.bom.gov.au" target="_blank">bom.gov.au</a>'
+        ' &nbsp;&bull;&nbsp; Data: NOAA GFS via AWS Open Data</footer>\n'
+        f'<script>{HTML_JS}</script>\n'
+        '</body></html>'
+    )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    print("=" * 56)
+    print("=" * 58)
     print("  Australia Severe Weather Outlook  [GFS live data]")
-    print("=" * 56)
+    print("=" * 58)
 
     print("\n[1/4] Fetching Australia map geometry...")
     geojson = fetch_geojson()
@@ -461,12 +724,12 @@ def main():
     if not date_s:
         print("      ERROR: GFS data unavailable")
         sys.exit(1)
-    run_label = f"NOAA GFS  {run_dt.strftime('%Y-%m-%d %HZ')}"
+    run_label = f"NOAA GFS {run_dt.strftime('%Y-%m-%d %HZ')}"
     print(f"      {run_label}")
 
-    print("\n[3/4] Downloading GFS fields for Australia (7 vars x 5 days)...")
+    print("\n[3/4] Downloading GFS fields (7 vars x 5 days)...")
     all_lats = all_lons = None
-    all_risks, dates = [], []
+    all_risks, all_metas, dates = [], [], []
     prev_apcp = None
 
     for day in range(FORECAST_DAYS):
@@ -483,6 +746,10 @@ def main():
         risks = compute_risks(fields, prev_apcp)
         all_risks.append(risks)
 
+        metas = generate_discussion(risks, lats, lons)
+        metas["_synoptic"] = synoptic_overview(risks, lats, lons)
+        all_metas.append(metas)
+
         if fields.get("apcp") is not None:
             prev_apcp = fields["apcp"].copy()
 
@@ -490,15 +757,15 @@ def main():
     images = []
     for day, (risks, date_str) in enumerate(zip(all_risks, dates)):
         print(f"  Day {day+1}...", end=" ", flush=True)
-        images.append(render_day(all_lats, all_lons, risks, date_str, polys, clip_path))
+        images.append(render_day_image(all_lats, all_lons, risks, date_str, polys, clip_path))
     print("done")
 
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
     with open(out, "w") as f:
-        f.write(make_html(images, dates, run_label))
+        f.write(make_html(images, all_metas, dates, run_label, timestamp))
 
-    print(f"\n  Saved -> {out}")
-    print(f"  Open index.html in your browser.\n")
+    print(f"\n  Saved -> {out}\n")
 
 
 if __name__ == "__main__":
