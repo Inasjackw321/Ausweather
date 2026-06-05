@@ -250,8 +250,9 @@ def compute_risks(fields, prev_apcp=None):
             "Flood": flood_risk, "Fire": fire_risk, "Tornado": tor_risk}
 
 
-# ── Discussion generation ──────────────────────────────────────────────────────
+# ── Discussion generation ─────────────────────────────────────────────────────
 def region_risks(risk_grid, lats, lons):
+    """Return list of (region_name, max_risk) sorted by risk desc."""
     results = []
     for name, lat_min, lat_max, lon_min, lon_max in AUS_REGIONS:
         lm = (lats >= lat_min) & (lats <= lat_max)
@@ -278,26 +279,26 @@ def _fmt_regions(names):
 DISC_TEMPLATES = {
     "Wind": {
         0: "No significant wind risk forecast for this period.",
-        1: "Marginal wind risk across {r}. Isolated gusts to 50-60 km/h possible.",
-        2: "Slight wind risk across {r}. Gusty conditions with gusts reaching 60-75 km/h are possible, particularly in elevated areas and along exposed coastlines.",
-        3: "Enhanced wind risk across {r}. Damaging gusts of 80-95 km/h are forecast, likely associated with a frontal system or strong pressure gradient. Structural damage and fallen trees are possible.",
-        4: "Dangerous wind conditions forecast across {r}. Destructive gusts to 100-120 km/h likely in exposed locations. Significant property damage is possible - secure outdoor items and check with your local emergency services.",
+        1: "Marginal wind risk across {r}. Isolated gusts to 50–60 km/h possible.",
+        2: "Slight wind risk across {r}. Gusty conditions with gusts reaching 60–75 km/h are possible, particularly in elevated areas and along exposed coastlines.",
+        3: "Enhanced wind risk across {r}. Damaging gusts of 80–95 km/h are forecast, likely associated with a frontal system or strong pressure gradient. Structural damage and fallen trees are possible.",
+        4: "Dangerous wind conditions forecast across {r}. Destructive gusts to 100–120 km/h likely in exposed locations. Significant property damage is possible — secure outdoor items and check with your local emergency services.",
         5: "Extreme wind event forecast across {r}. Life-threatening gusts exceeding 120 km/h anticipated. Avoid all unnecessary travel. Take shelter in a sturdy building away from windows.",
     },
     "Hail": {
         0: "No significant hail risk forecast.",
         1: "Marginal hail risk across {r}. Isolated thunderstorms with small hail are possible.",
         2: "Slight hail risk across {r}. Isolated thunderstorms capable of producing small to moderate hail are possible where instability increases.",
-        3: "Enhanced hail risk across {r}. Elevated CAPE values support severe thunderstorm development. Large hail (2-4 cm) is possible with the most organised storms.",
-        4: "Significant hail risk across {r}. High CAPE combined with wind shear creates an environment favourable for supercells. Large to very large hail (4-6 cm) is possible.",
+        3: "Enhanced hail risk across {r}. Elevated CAPE values support severe thunderstorm development. Large hail (2–4 cm) is possible with the most organised storms.",
+        4: "Significant hail risk across {r}. High CAPE combined with wind shear creates an environment favourable for supercells. Large to very large hail (4–6 cm) is possible.",
         5: "Extreme hail risk across {r}. Supercell thunderstorms capable of producing giant hail (>6 cm) are possible. Protect vehicles and seek shelter indoors.",
     },
     "Flood": {
         0: "No significant flooding risk forecast.",
-        1: "Marginal flooding risk across {r}. Rainfall of 10-25 mm possible with minor flooding in low-lying areas.",
-        2: "Slight flooding risk across {r}. Rainfall accumulations of 25-50 mm forecast, with localised flash flooding possible in low-lying areas and smaller catchments.",
-        3: "Enhanced flooding risk across {r}. Moderate to heavy rainfall of 50-100 mm expected. Flash flooding is likely in susceptible areas; rivers may rise. Do not drive through floodwater.",
-        4: "Significant flooding risk across {r}. Rainfall accumulations of 100-150 mm forecast, likely causing major flash and river flooding. Evacuation of some areas may be required.",
+        1: "Marginal flooding risk across {r}. Rainfall of 10–25 mm possible with minor flooding in low-lying areas.",
+        2: "Slight flooding risk across {r}. Rainfall accumulations of 25–50 mm forecast, with localised flash flooding possible in low-lying areas and smaller catchments.",
+        3: "Enhanced flooding risk across {r}. Moderate to heavy rainfall of 50–100 mm expected. Flash flooding is likely in susceptible areas; rivers may rise. Do not drive through floodwater.",
+        4: "Significant flooding risk across {r}. Rainfall accumulations of 100–150 mm forecast, likely causing major flash and river flooding. Evacuation of some areas may be required.",
         5: "Catastrophic flooding forecast across {r}. Extreme rainfall of 150+ mm anticipated. Life-threatening flash and river flooding likely. Follow all emergency directions immediately.",
     },
     "Fire": {
@@ -306,7 +307,7 @@ DISC_TEMPLATES = {
         2: "Slight fire weather risk across {r}. Above-average temperatures combined with moderate winds and low humidity could support fire spread if ignition occurs.",
         3: "Enhanced fire weather risk across {r}. Elevated temperatures, dry conditions and strong winds will elevate fire danger. Avoid burning off and check local fire restrictions.",
         4: "Severe fire weather conditions forecast across {r}. Combination of very high temperatures, critically low humidity and strong winds creates a dangerous fire environment. Total Fire Bans likely.",
-        5: "Catastrophic fire weather conditions across {r}. Any fires that start will be extremely difficult to control and may threaten lives and homes. Do not wait to be told to leave - have your bushfire plan ready.",
+        5: "Catastrophic fire weather conditions across {r}. Any fires that start will be extremely difficult to control and may threaten lives and homes. Do not wait to be told to leave — have your bushfire plan ready.",
     },
     "Tornado": {
         0: "No significant tornado risk forecast.",
@@ -320,6 +321,7 @@ DISC_TEMPLATES = {
 
 
 def generate_discussion(risks, lats, lons):
+    """Return dict: hazard → (max_risk, top_region_names, discussion_text)"""
     out = {}
     for h in HAZARDS:
         mx = int(risks[h].max())
@@ -331,6 +333,7 @@ def generate_discussion(risks, lats, lons):
 
 
 def synoptic_overview(risks, lats, lons):
+    """Generate a one-paragraph synoptic context sentence."""
     def regional_max(risk_grid, lat_min, lat_max, lon_min, lon_max):
         lm = (lats >= lat_min) & (lats <= lat_max)
         om = (lons >= lon_min) & (lons <= lon_max)
@@ -357,8 +360,8 @@ def synoptic_overview(risks, lats, lons):
     if not features:
         max_overall = max(int(risks[h].max()) for h in HAZARDS)
         if max_overall <= 1:
-            return "A relatively quiet weather pattern is forecast. No major severe weather systems are expected, though isolated hazards may persist in some regions."
-        return "A broadly benign pattern is expected, though localised hazards remain possible across parts of the continent."
+            return ("A relatively quiet weather pattern is forecast. No major severe weather systems are expected, though isolated hazards may persist in some regions.")
+        return ("A broadly benign pattern is expected, though localised hazards remain possible across parts of the continent.")
 
     if len(features) == 1:
         return f"The primary weather driver for this period is {features[0]}."
@@ -366,7 +369,7 @@ def synoptic_overview(risks, lats, lons):
     return f"The forecast period is characterised by {joined}."
 
 
-# ── Map geometry ────────────────────────────────────────────────────────────────
+# ── Map geometry ──────────────────────────────────────────────────────────────
 def fetch_geojson():
     for url in GEOJSON_URLS:
         try:
@@ -403,13 +406,13 @@ def polys_to_clip_path(polys):
     return Path(verts, codes) if verts else None
 
 
-# ── Map rendering ──────────────────────────────────────────────────────────────
+# ── Map rendering ─────────────────────────────────────────────────────────────
 CMAP = mcolors.ListedColormap([RISK[i][1] for i in range(6)])
 NORM = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5], CMAP.N)
 LON0, LON1, LAT0, LAT1 = AUS_BOUNDS
 
 
-def draw_panel(ax, lats, lons, risk_grid, title, polys, clip_path):
+def draw_panel(ax, lats, lons, risk_grid, title, polys, clip_path, show_labels=True):
     ax.set_xlim(LON0, LON1)
     ax.set_ylim(LAT0, LAT1)
     ax.set_aspect("equal")
@@ -438,11 +441,13 @@ def draw_panel(ax, lats, lons, risk_grid, title, polys, clip_path):
             facecolor="none", edgecolor="#4a7a96", linewidth=0.6, zorder=4,
         ))
 
-    for lon, lat, abbrev in STATE_LABELS:
-        ax.text(lon, lat, abbrev, fontsize=5.5, color="#6aaccc",
-                ha="center", va="center", zorder=5, fontfamily="monospace",
-                fontweight="bold", alpha=0.75,
-                path_effects=[pe.withStroke(linewidth=1.5, foreground="#1a2e40")])
+    # State abbreviation labels
+    if show_labels:
+        for lon, lat, abbrev in STATE_LABELS:
+            ax.text(lon, lat, abbrev, fontsize=5.5, color="#6aaccc",
+                    ha="center", va="center", zorder=5, fontfamily="monospace",
+                    fontweight="bold", alpha=0.75,
+                    path_effects=[pe.withStroke(linewidth=1.5, foreground="#1a2e40")])
 
     ax.set_title(title.upper(), fontsize=9, fontweight="bold",
                  color="#cce8ff", pad=3, fontfamily="monospace")
@@ -484,7 +489,12 @@ def render_day_image(lats, lons, risk_grids, date_label, polys, clip_path):
     return b64
 
 
-# ── HTML generation ─────────────────────────────────────────────────────────────────
+# ── HTML generation ───────────────────────────────────────────────────────────
+_RISK_CSS_VARS = "\n".join(
+    f"  --c-{RISK[i][0].lower()}: {RISK[i][1]};"
+    for i in range(6)
+)
+
 HTML_CSS = """
 :root {
   --bg:      #0a1520;
@@ -497,6 +507,7 @@ HTML_CSS = """
   --text2:   #d8eaf8;
   --dim:     #4a7090;
   --accent:  #4a9ed0;
+""" + _RISK_CSS_VARS + """
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -507,6 +518,8 @@ body {
   line-height: 1.5;
   min-height: 100vh;
 }
+
+/* ── Header ── */
 header {
   background: linear-gradient(180deg, #060e18 0%, #0c1a28 100%);
   border-bottom: 2px solid var(--border);
@@ -517,12 +530,39 @@ header {
   gap: 16px;
   flex-wrap: wrap;
 }
-.hdr-title h1 { font-size: 18px; color: var(--text2); letter-spacing: 3px; font-weight: bold; }
-.hdr-title .subtitle { color: var(--dim); font-size: 10px; letter-spacing: 2px; margin-top: 3px; }
-.hdr-meta { display: flex; gap: 20px; flex-wrap: wrap; }
-.meta-item { text-align: right; }
-.meta-label { font-size: 9px; color: var(--dim); letter-spacing: 2px; }
-.meta-value { font-size: 11px; color: var(--accent); margin-top: 1px; }
+.hdr-title h1 {
+  font-size: 18px;
+  color: var(--text2);
+  letter-spacing: 3px;
+  font-weight: bold;
+}
+.hdr-title .subtitle {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 2px;
+  margin-top: 3px;
+}
+.hdr-meta {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.meta-item {
+  text-align: right;
+}
+.meta-label {
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.meta-value {
+  font-size: 11px;
+  color: var(--accent);
+  margin-top: 1px;
+}
+
+/* ── Tab bar ── */
 .tab-bar {
   background: var(--bg2);
   border-bottom: 2px solid var(--border);
@@ -534,71 +574,210 @@ header {
 .tab-bar::-webkit-scrollbar-track { background: var(--bg2); }
 .tab-bar::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 .tab {
-  flex: 1; min-width: 110px; padding: 10px 14px;
-  background: none; border: none; border-right: 1px solid var(--border);
-  color: var(--dim); font-family: inherit; font-size: 11px; font-weight: bold;
-  letter-spacing: 1px; cursor: pointer; transition: background 0.15s, color 0.15s;
+  flex: 1;
+  min-width: 110px;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
   text-align: center;
+  position: relative;
 }
 .tab:hover { background: var(--bg3); color: var(--text); }
-.tab.active { background: var(--bg3); color: var(--text2); border-bottom: 3px solid var(--accent); }
+.tab.active {
+  background: var(--bg3);
+  color: var(--text2);
+  border-bottom: 3px solid var(--accent);
+}
 .tab .tab-day  { display: block; font-size: 11px; letter-spacing: 1px; }
 .tab .tab-date { display: block; font-size: 9px; color: var(--dim); margin-top: 2px; font-weight: normal; }
 .tab .tab-top  {
-  display: inline-block; width: 8px; height: 8px; border-radius: 2px;
-  margin-left: 5px; vertical-align: middle; position: relative; top: -1px;
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  margin-left: 5px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
 }
 .tab.active .tab-date { color: #7aaccc; }
+
+/* ── Day panel ── */
 .day-panel { display: none; }
 .day-panel.active { display: block; }
+
+/* ── Risk badge row ── */
 .badge-row {
-  display: flex; gap: 8px; padding: 10px 12px;
-  background: var(--bg2); border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 .badge {
-  display: flex; align-items: center; gap: 7px;
-  background: var(--bg3); border: 1px solid var(--border2);
-  border-radius: 4px; padding: 5px 10px; min-width: 180px; flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 5px 10px;
+  min-width: 180px;
+  flex: 1;
 }
 .badge-icon { font-size: 14px; }
-.badge-name { font-size: 10px; font-weight: bold; letter-spacing: 1px; color: var(--text); min-width: 55px; }
-.badge-level { font-size: 9px; font-weight: bold; padding: 2px 6px; border-radius: 3px; letter-spacing: 1px; white-space: nowrap; }
-.badge-regions { font-size: 9px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.maps-wrap { padding: 10px 12px 4px; background: var(--bg2); }
-.maps-wrap img { width: 100%; display: block; border: 1px solid var(--border); border-radius: 3px; }
-.discussion { margin: 10px 12px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; overflow: hidden; }
+.badge-name {
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  color: var(--text);
+  min-width: 55px;
+}
+.badge-level {
+  font-size: 9px;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.badge-regions {
+  font-size: 9px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Maps ── */
+.maps-wrap {
+  padding: 10px 12px 4px;
+  background: var(--bg2);
+}
+.maps-wrap img {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+/* ── Discussion ── */
+.discussion {
+  margin: 10px 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  overflow: hidden;
+}
 .disc-header {
-  background: var(--bg2); border-bottom: 1px solid var(--border2);
-  padding: 8px 14px; font-size: 11px; font-weight: bold;
-  color: var(--text2); letter-spacing: 2px; display: flex; align-items: center; gap: 8px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border2);
+  padding: 8px 14px;
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text2);
+  letter-spacing: 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .disc-synoptic {
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
-  font-size: 12px; color: var(--text2); line-height: 1.6; font-style: italic;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.6;
+  font-style: italic;
 }
-.disc-hazards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.disc-hazards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
 .disc-hazard {
   padding: 10px 14px;
-  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 .disc-hazard:last-child { border-right: none; }
-.disc-hazard-hdr { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-.disc-hazard-icon { font-size: 13px; }
-.disc-hazard-name { font-size: 10px; font-weight: bold; letter-spacing: 1px; color: var(--text2); }
-.disc-hazard-level { font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 2px; margin-left: auto; letter-spacing: 1px; }
-.disc-hazard-text { font-size: 11px; color: var(--text); line-height: 1.55; }
-.disc-hazard-text strong { color: var(--text2); }
-.legend {
-  display: flex; align-items: center; gap: 6px; padding: 8px 12px;
-  background: var(--bg2); border-top: 1px solid var(--border); flex-wrap: wrap;
+.disc-hazard-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
 }
-.legend-label { font-size: 9px; color: var(--dim); letter-spacing: 2px; margin-right: 4px; }
-.legend-item { display: flex; align-items: center; gap: 4px; font-size: 9px; letter-spacing: 1px; }
-.legend-swatch { width: 18px; height: 14px; border-radius: 2px; }
+.disc-hazard-icon { font-size: 13px; }
+.disc-hazard-name {
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  color: var(--text2);
+}
+.disc-hazard-level {
+  font-size: 9px;
+  font-weight: bold;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-left: auto;
+  letter-spacing: 1px;
+}
+.disc-hazard-text {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.55;
+}
+.disc-hazard-text strong { color: var(--text2); }
+
+/* ── Legend ── */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.legend-label {
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 2px;
+  margin-right: 4px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+.legend-swatch {
+  width: 18px;
+  height: 14px;
+  border-radius: 2px;
+}
 .legend-item span { color: var(--dim); }
-footer { text-align: center; padding: 10px; font-size: 10px; color: var(--dim); border-top: 1px solid var(--border); letter-spacing: 1px; }
+
+/* ── Footer ── */
+footer {
+  text-align: center;
+  padding: 10px;
+  font-size: 10px;
+  color: var(--dim);
+  border-top: 1px solid var(--border);
+  letter-spacing: 1px;
+}
 footer a { color: #3a7090; text-decoration: none; }
 footer a:hover { color: var(--accent); }
+
+/* ── Responsive ── */
 @media (max-width: 700px) {
   .hdr-title h1 { font-size: 14px; letter-spacing: 1px; }
   .hdr-meta { display: none; }
@@ -609,98 +788,157 @@ footer a:hover { color: var(--accent); }
 
 HTML_JS = """
 function showDay(n) {
-  document.querySelectorAll('.day-panel').forEach((p, i) => p.classList.toggle('active', i === n));
-  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === n));
+  document.querySelectorAll('.day-panel').forEach((p, i) => {
+    p.classList.toggle('active', i === n);
+  });
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', i === n);
+  });
   history.replaceState(null, '', '#day' + n);
 }
-(function() { var m = location.hash.match(/#day(\\d)/); showDay(m ? parseInt(m[1]) : 0); })();
+// Restore from hash
+(function() {
+  var m = location.hash.match(/#day(\\d)/);
+  showDay(m ? parseInt(m[1]) : 0);
+})();
 """
+
+
+def _risk_badge_style(level):
+    _, color = RISK[level]
+    fg = "black" if level < 3 else "white"
+    return f'style="background:{color};color:{fg}"'
 
 
 def make_html(images, day_metas, dates, run_label, timestamp):
     day_labels = ["TODAY", "TOMORROW", "DAY 3", "DAY 4", "DAY 5"]
-    short_dates = [(datetime.strptime(d, "%A, %d %b %Y")).strftime("%a %d %b") for d in dates]
+    short_dates = [
+        (datetime.strptime(d, "%A, %d %b %Y")).strftime("%a %d %b")
+        for d in dates
+    ]
 
+    # Build tabs
     tabs = []
     for i, (label, short) in enumerate(zip(day_labels, short_dates)):
+        # Find highest risk for the dot indicator
         top_risk = max(meta["max_risk"] for k, meta in day_metas[i].items() if k != "_synoptic")
         _, dot_color = RISK[top_risk]
         tabs.append(
-            f'<button class="tab" onclick="showDay({i})">' +
-            f'<span class="tab-day">{label}<span class="tab-top" style="background:{dot_color}"></span></span>' +
-            f'<span class="tab-date">{short}</span></button>'
+            f'<button class="tab" onclick="showDay({i})">'
+            f'<span class="tab-day">{label}'
+            f'<span class="tab-top" style="background:{dot_color}"></span></span>'
+            f'<span class="tab-date">{short}</span>'
+            f'</button>'
         )
 
+    # Build day panels
     panels = []
     for i, (img, metas, date_str) in enumerate(zip(images, day_metas, dates)):
+        # Badge row
         badges = []
         for h in HAZARDS:
             meta = metas[h]
-            mx = meta["max_risk"]
+            mx   = meta["max_risk"]
             lbl, color = RISK[mx]
-            fg = "black" if mx < 3 else "white"
+            fg   = "black" if mx < 3 else "white"
             region_str = " · ".join(meta["regions"][:2]) if meta["regions"] else "—"
             badges.append(
-                f'<div class="badge"><span class="badge-icon">{HAZARD_ICONS[h]}</span>' +
-                f'<span class="badge-name">{h.upper()}</span>' +
-                f'<span class="badge-level" style="background:{color};color:{fg}">{lbl}</span>' +
-                f'<span class="badge-regions">{region_str}</span></div>'
+                f'<div class="badge">'
+                f'<span class="badge-icon">{HAZARD_ICONS[h]}</span>'
+                f'<span class="badge-name">{h.upper()}</span>'
+                f'<span class="badge-level" style="background:{color};color:{fg}">{lbl}</span>'
+                f'<span class="badge-regions">{region_str}</span>'
+                f'</div>'
             )
 
+        # Discussion hazard cards
         hazard_cards = []
         for h in HAZARDS:
             meta = metas[h]
-            mx = meta["max_risk"]
+            mx   = meta["max_risk"]
             lbl, color = RISK[mx]
-            fg = "black" if mx < 3 else "white"
+            fg   = "black" if mx < 3 else "white"
             hazard_cards.append(
-                f'<div class="disc-hazard"><div class="disc-hazard-hdr">' +
-                f'<span class="disc-hazard-icon">{HAZARD_ICONS[h]}</span>' +
-                f'<span class="disc-hazard-name">{h.upper()}</span>' +
-                f'<span class="disc-hazard-level" style="background:{color};color:{fg}">{lbl}</span>' +
-                f'</div><div class="disc-hazard-text">{metas[h]["text"]}</div></div>'
+                f'<div class="disc-hazard">'
+                f'<div class="disc-hazard-hdr">'
+                f'<span class="disc-hazard-icon">{HAZARD_ICONS[h]}</span>'
+                f'<span class="disc-hazard-name">{h.upper()}</span>'
+                f'<span class="disc-hazard-level" style="background:{color};color:{fg}">{lbl}</span>'
+                f'</div>'
+                f'<div class="disc-hazard-text">{meta["text"]}</div>'
+                f'</div>'
             )
 
+        synoptic = metas["_synoptic"]
+
         panels.append(
-            f'<div class="day-panel" id="day{i}">' +
-            f'<div class="badge-row">{"" .join(badges)}</div>' +
-            f'<div class="maps-wrap"><img src="data:image/png;base64,{img}" alt="{date_str}"></div>' +
-            f'<div class="discussion">' +
-            f'<div class="disc-header">\U0001f4cb FORECAST DISCUSSION · {date_str.upper()}</div>' +
-            f'<div class="disc-synoptic">{metas["_synoptic"]}</div>' +
-            f'<div class="disc-hazards">{"" .join(hazard_cards)}</div>' +
-            f'</div></div>'
+            f'<div class="day-panel" id="day{i}">'
+            f'<div class="badge-row">{"".join(badges)}</div>'
+            f'<div class="maps-wrap">'
+            f'<img src="data:image/png;base64,{img}" alt="{date_str} outlook">'
+            f'</div>'
+            f'<div class="discussion">'
+            f'<div class="disc-header">📋 FORECAST DISCUSSION &nbsp;·&nbsp; {date_str.upper()}</div>'
+            f'<div class="disc-synoptic">{synoptic}</div>'
+            f'<div class="disc-hazards">{"".join(hazard_cards)}</div>'
+            f'</div>'
+            f'</div>'
         )
 
+    # Legend
     legend_items = "".join(
-        f'<div class="legend-item"><div class="legend-swatch" style="background:{RISK[i][1]}"></div><span>{RISK[i][0]}</span></div>'
+        f'<div class="legend-item">'
+        f'<div class="legend-swatch" style="background:{RISK[i][1]}"></div>'
+        f'<span>{RISK[i][0]}</span>'
+        f'</div>'
         for i in range(6)
     )
 
-    return (
-        '<!DOCTYPE html><html lang="en"><head>\n'
-        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">\n'
-        '<title>Australia Severe Weather Outlook</title>\n'
-        f'<style>{HTML_CSS}</style>\n</head><body>\n'
-        '<header>\n'
-        '  <div class="hdr-title">\n'
-        '  <h1>&#9928; AUSTRALIA SEVERE WEATHER OUTLOOK</h1>\n'
-        '  <div class="subtitle">5-DAY RISK FORECAST &nbsp;&bull;&nbsp; WIND &nbsp;&bull;&nbsp; HAIL &nbsp;&bull;&nbsp; FLOOD &nbsp;&bull;&nbsp; FIRE &nbsp;&bull;&nbsp; TORNADO</div>\n'
-        '  </div>\n'
-        '  <div class="hdr-meta">\n'
-        f'    <div class="meta-item"><div class="meta-label">DATA SOURCE</div><div class="meta-value">{run_label}</div></div>\n'
-        f'    <div class="meta-item"><div class="meta-label">GENERATED</div><div class="meta-value">{timestamp} UTC</div></div>\n'
-        '  </div>\n'
-        '</header>\n'
-        f'<div class="tab-bar">{"" .join(tabs)}</div>\n'
-        + "".join(panels) +
-        f'<div class="legend"><span class="legend-label">RISK SCALE</span>{legend_items}</div>\n'
-        '<footer>NOT FOR OPERATIONAL USE &nbsp;&bull;&nbsp; '
-        'For official warnings visit <a href="https://www.bom.gov.au" target="_blank">bom.gov.au</a>'
-        ' &nbsp;&bull;&nbsp; Data: NOAA GFS via AWS Open Data</footer>\n'
-        f'<script>{HTML_JS}</script>\n'
-        '</body></html>'
-    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Australia Severe Weather Outlook</title>
+<style>{HTML_CSS}</style>
+</head>
+<body>
+
+<header>
+  <div class="hdr-title">
+    <h1>&#9928; AUSTRALIA SEVERE WEATHER OUTLOOK</h1>
+    <div class="subtitle">5-DAY RISK FORECAST &nbsp;&bull;&nbsp; WIND &nbsp;&bull;&nbsp; HAIL &nbsp;&bull;&nbsp; FLOOD &nbsp;&bull;&nbsp; FIRE &nbsp;&bull;&nbsp; TORNADO</div>
+  </div>
+  <div class="hdr-meta">
+    <div class="meta-item">
+      <div class="meta-label">DATA SOURCE</div>
+      <div class="meta-value">{run_label}</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">GENERATED</div>
+      <div class="meta-value">{timestamp} UTC</div>
+    </div>
+  </div>
+</header>
+
+<div class="tab-bar">{''.join(tabs)}</div>
+
+{''.join(panels)}
+
+<div class="legend">
+  <span class="legend-label">RISK SCALE</span>
+  {legend_items}
+</div>
+
+<footer>
+  NOT FOR OPERATIONAL USE &nbsp;&bull;&nbsp;
+  For official warnings visit <a href="https://www.bom.gov.au" target="_blank">bom.gov.au</a>
+  &nbsp;&bull;&nbsp; Data: NOAA GFS via AWS Open Data
+</footer>
+
+<script>{HTML_JS}</script>
+</body>
+</html>"""
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -727,7 +965,7 @@ def main():
     run_label = f"NOAA GFS {run_dt.strftime('%Y-%m-%d %HZ')}"
     print(f"      {run_label}")
 
-    print("\n[3/4] Downloading GFS fields (7 vars x 5 days)...")
+    print("\n[3/4] Downloading GFS fields (7 vars × 5 days)...")
     all_lats = all_lons = None
     all_risks, all_metas, dates = [], [], []
     prev_apcp = None
@@ -765,7 +1003,7 @@ def main():
     with open(out, "w") as f:
         f.write(make_html(images, all_metas, dates, run_label, timestamp))
 
-    print(f"\n  Saved -> {out}\n")
+    print(f"\n  Saved → {out}\n")
 
 
 if __name__ == "__main__":
