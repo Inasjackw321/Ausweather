@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Australian SPC-style 5-Day Severe Weather Outlook
-Real data: NOAA GFS 0.25° global forecast via NOAA AWS Open Data
-  https://noaa-gfs-bdp-pds.s3.amazonaws.com
+Ausweather — Australian Severe Weather Outlook
+Real data: NOAA GFS 0.25° via AWS Open Data
 """
 
-import sys, os, base64
+import sys, os, base64, json
 from io import BytesIO
 from datetime import datetime, timedelta
 
 import requests
 import numpy as np
+from scipy.ndimage import gaussian_filter
 import eccodes
 import matplotlib
 matplotlib.use("Agg")
@@ -22,27 +22,19 @@ from matplotlib.collections import PatchCollection
 from matplotlib.path import Path
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────
 GFS_BASE = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
 GEOJSON_URLS = [
     "https://raw.githubusercontent.com/tonywr71/GeoJson-Data/master/australian-states.min.geojson",
     "https://raw.githubusercontent.com/rowanhogan/australian-states/master/states.min.geojson",
 ]
 AUS_BOUNDS    = (112.0, 154.5, -44.5, -9.5)
+LON0, LON1, LAT0, LAT1 = AUS_BOUNDS
 FORECAST_DAYS = 5
 
-HAZARDS = ["Wind", "Hail", "Flood", "Fire", "Tornado"]
+HAZARDS = ["Wind", "Hail", "Flood", "Tornado"]
+HAZARD_ICONS = {"Wind": "💨", "Hail": "🌨", "Flood": "🌊", "Tornado": "🌪"}
 
-RISK = {
-    0: ("NONE", "#b0b8c0"),
-    1: ("MRGL", "#4caf50"),
-    2: ("SLGT", "#e6d800"),
-    3: ("ENH",  "#ff9800"),
-    4: ("MDT",  "#f44336"),
-    5: ("HIGH", "#9c27b0"),
-}
-
-# State label positions (lon, lat, abbrev)
 STATE_LABELS = [
     (146.5, -32.0, "NSW"),
     (144.5, -36.8, "VIC"),
@@ -53,8 +45,22 @@ STATE_LABELS = [
     (146.5, -42.0, "TAS"),
 ]
 
+# Heatmap colour ramp: background → faint cyan → vivid cyan → green → yellow → orange → purple
+HEATMAP_CMAP = mcolors.LinearSegmentedColormap.from_list(
+    "ausweather", [
+        (0.00, "#050a10"),
+        (0.04, "#050a10"),   # dead zone for near-zero gaussian bleed
+        (0.16, "#004d66"),   # faint dark cyan
+        (0.32, "#00bcd4"),   # cyan   (MRGL)
+        (0.50, "#4caf50"),   # green  (SLGT)
+        (0.65, "#ffeb3b"),   # yellow (ENH)
+        (0.80, "#ff5722"),   # orange (MDT)
+        (1.00, "#9c27b0"),   # purple (HIGH)
+    ], N=256
+)
 
-# ── GFS index helpers ─────────────────────────────────────────────────────────
+
+# ── GFS index helpers ──────────────────────────────────────────────────────────
 def gfs_url(date_s, run_s, fhour, ext=""):
     return (f"{GFS_BASE}/gfs.{date_s}/{run_s}/atmos/"
             f"gfs.t{run_s}z.pgrb2.0p25.f{fhour:03d}{ext}")
@@ -106,7 +112,7 @@ def find_record(records, varname, level_substr=None, time_substr=None, level_exc
     return None
 
 
-# ── GRIB2 download & parse ────────────────────────────────────────────────────
+# ── GRIB2 download & parse ─────────────────────────────────────────────────────
 def download_range(url, start, end):
     end_s = str(end - 1) if end else ""
     r = requests.get(url, headers={"Range": f"bytes={start}-{end_s}"}, timeout=60)
@@ -130,21 +136,20 @@ def grib_to_aus(grib_bytes):
     lats = np.linspace(lat1, lat2, nj)
     lons = np.linspace(lon1, lon2, ni)
     data = vals.reshape(nj, ni)
-    lon_min, lon_max, lat_min, lat_max = AUS_BOUNDS
-    return (lats[(lats >= lat_min) & (lats <= lat_max)],
-            lons[(lons >= lon_min) & (lons <= lon_max)],
-            data[np.ix_((lats >= lat_min) & (lats <= lat_max),
-                        (lons >= lon_min) & (lons <= lon_max))])
+    return (lats[(lats >= LAT0) & (lats <= LAT1)],
+            lons[(lons >= LON0) & (lons <= LON1)],
+            data[np.ix_((lats >= LAT0) & (lats <= LAT1),
+                        (lons >= LON0) & (lons <= LON1))])
 
 
 VAR_SPECS = [
-    ("ugrd",  "UGRD", "10 m above ground", None,      None),
-    ("vgrd",  "VGRD", "10 m above ground", None,      None),
-    ("gust",  "GUST", "surface",           "PV=",     None),
-    ("tmp2m", "TMP",  "2 m above ground",  None,      None),
-    ("cape",  "CAPE", "surface",           None,      None),
-    ("lftx",  "LFTX", "surface",           None,      None),
-    ("apcp",  "APCP", "surface",           None,      "day acc"),
+    ("ugrd",  "UGRD", "10 m above ground", None,  None),
+    ("vgrd",  "VGRD", "10 m above ground", None,  None),
+    ("gust",  "GUST", "surface",           "PV=", None),
+    ("tmp2m", "TMP",  "2 m above ground",  None,  None),
+    ("cape",  "CAPE", "surface",           None,  None),
+    ("lftx",  "LFTX", "surface",           None,  None),
+    ("apcp",  "APCP", "surface",           None,  "day acc"),
 ]
 
 
@@ -160,8 +165,8 @@ def fetch_day(date_s, run_s, fhour):
             fields[key] = None
             continue
         try:
-            url = gfs_url(date_s, run_s, fhour)
-            l, o, g = grib_to_aus(download_range(url, rec["start"], rec["end"]))
+            l, o, g = grib_to_aus(download_range(gfs_url(date_s, run_s, fhour),
+                                                  rec["start"], rec["end"]))
             if lats is None:
                 lats, lons = l, o
             fields[key] = g
@@ -172,7 +177,7 @@ def fetch_day(date_s, run_s, fhour):
     return lats, lons, fields
 
 
-# ── Risk calculations ─────────────────────────────────────────────────────────
+# ── Risk calculations ──────────────────────────────────────────────────────────
 def compute_risks(fields, prev_apcp=None):
     def f(key):
         v = fields.get(key)
@@ -181,10 +186,8 @@ def compute_risks(fields, prev_apcp=None):
 
     ugrd, vgrd = f("ugrd"), f("vgrd")
     gust  = f("gust")
-    tmp   = f("tmp2m") - 273.15
     cape  = f("cape")
     lftx  = f("lftx")
-
     apcp_cum = f("apcp")
     daily_precip = (np.maximum(0.0, apcp_cum - prev_apcp)
                     if prev_apcp is not None else apcp_cum)
@@ -209,12 +212,6 @@ def compute_risks(fields, prev_apcp=None):
     for t, l in [(10,1),(25,2),(50,3),(100,4),(150,5)]:
         flood_risk[daily_precip >= t] = l
 
-    fwi = (tmp - 15.0) * 1.8 + wind_kph * 0.9
-    fire_risk = np.zeros(fwi.shape, dtype=int)
-    for t, l in [(8,1),(20,2),(38,3),(58,4),(80,5)]:
-        fire_risk[fwi >= t] = l
-    fire_risk[daily_precip >= 3] = 0
-
     tor_risk = np.zeros(cape.shape, dtype=int)
     for (c, li, g, p), l in [
         ((600,-2,0,0),1), ((1200,-3,0,30),2),
@@ -226,11 +223,10 @@ def compute_risks(fields, prev_apcp=None):
         tor_risk[mask] = l
 
     return {"Wind": wind_risk, "Hail": hail_risk,
-            "Flood": flood_risk, "Fire": fire_risk, "Tornado": tor_risk}
+            "Flood": flood_risk, "Tornado": tor_risk}
 
 
-
-# ── Map geometry ──────────────────────────────────────────────────────────────
+# ── Map geometry ───────────────────────────────────────────────────────────────
 def fetch_geojson():
     for url in GEOJSON_URLS:
         try:
@@ -267,174 +263,367 @@ def polys_to_clip_path(polys):
     return Path(verts, codes) if verts else None
 
 
-# ── Map rendering ─────────────────────────────────────────────────────────────
-CMAP = mcolors.ListedColormap([RISK[i][1] for i in range(6)])
-NORM = mcolors.BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5], CMAP.N)
-LON0, LON1, LAT0, LAT1 = AUS_BOUNDS
-
-
-def draw_panel(ax, lats, lons, risk_grid, title, polys, clip_path, show_labels=True):
+# ── Heatmap rendering ──────────────────────────────────────────────────────────
+def render_hazard_image(lats, lons, risk_grid, polys, clip_path):
+    fig = plt.figure(figsize=(14, 10.5), facecolor="#050a10")
+    ax  = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(LON0, LON1)
     ax.set_ylim(LAT0, LAT1)
-    ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_facecolor("#1a2e40")
+    ax.set_facecolor("#050a10")
 
+    # Land base
     if polys:
         ax.add_collection(PatchCollection(
             [Polygon(p, closed=True) for p in polys],
-            facecolor="#253545", edgecolor="none", zorder=1,
-        ))
+            facecolor="#0c1824", edgecolor="none", zorder=1))
 
     GL, GLatG = np.meshgrid(lons, lats)
-    cf = ax.contourf(GL, GLatG, risk_grid,
-                     levels=[-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
-                     cmap=CMAP, norm=NORM, alpha=0.85, zorder=2)
+    norm = mcolors.Normalize(vmin=0, vmax=5)
 
+    # Glow pass — heavy blur, lower alpha
+    glow = gaussian_filter(risk_grid.astype(float), sigma=4.0)
+    cf_glow = ax.contourf(GL, GLatG, glow,
+                          levels=np.linspace(0.15, 5, 60),
+                          cmap=HEATMAP_CMAP, norm=norm, alpha=0.45, zorder=2)
+
+    # Core pass — tighter blur, stronger alpha
+    core = gaussian_filter(risk_grid.astype(float), sigma=2.0)
+    cf_core = ax.contourf(GL, GLatG, core,
+                          levels=np.linspace(0.15, 5, 60),
+                          cmap=HEATMAP_CMAP, norm=norm, alpha=0.90, zorder=3)
+
+    # Clip both to Australia coastline
     if clip_path is not None:
-        cp = PathPatch(clip_path, transform=ax.transData, visible=False)
-        ax.add_patch(cp)
-        cf.set_clip_path(cp)
+        cp1 = PathPatch(clip_path, transform=ax.transData, visible=False)
+        ax.add_patch(cp1)
+        cf_glow.set_clip_path(cp1)
+        cp2 = PathPatch(clip_path, transform=ax.transData, visible=False)
+        ax.add_patch(cp2)
+        cf_core.set_clip_path(cp2)
 
+    # State borders
     if polys:
         ax.add_collection(PatchCollection(
             [Polygon(p, closed=True) for p in polys],
-            facecolor="none", edgecolor="#4a7a96", linewidth=0.6, zorder=4,
-        ))
+            facecolor="none", edgecolor="#1e3a52", linewidth=0.8, zorder=5))
 
     # State abbreviation labels
-    if show_labels:
-        for lon, lat, abbrev in STATE_LABELS:
-            ax.text(lon, lat, abbrev, fontsize=5.5, color="#6aaccc",
-                    ha="center", va="center", zorder=5, fontfamily="monospace",
-                    fontweight="bold", alpha=0.75,
-                    path_effects=[pe.withStroke(linewidth=1.5, foreground="#1a2e40")])
-
-    ax.set_title(title.upper(), fontsize=9, fontweight="bold",
-                 color="#cce8ff", pad=3, fontfamily="monospace")
-
-
-def render_day_image(lats, lons, risk_grids, date_label, polys, clip_path):
-    fig = plt.figure(figsize=(22, 5.6), facecolor="#0c1824")
-    fig.text(0.5, 0.975,
-             f"AUSTRALIA SEVERE WEATHER OUTLOOK  ·  {date_label}",
-             ha="center", va="top", fontsize=12, fontweight="bold",
-             color="white", fontfamily="monospace",
-             path_effects=[pe.withStroke(linewidth=3, foreground="#0c1824")])
-
-    panel_w = 0.188
-    for i, hazard in enumerate(HAZARDS):
-        x0 = 0.006 + i * (panel_w + 0.006)
-        ax = fig.add_axes([x0, 0.06, panel_w, 0.875])
-        draw_panel(ax, lats, lons, risk_grids[hazard], hazard, polys, clip_path)
-
-    lax = fig.add_axes([0.006, 0.005, 0.988, 0.050])
-    lax.axis("off")
-    lax.set_facecolor("#06101a")
-    for i in range(6):
-        label, color = RISK[i]
-        x = 0.005 + i * 0.165
-        lax.add_patch(plt.Rectangle((x, 0.05), 0.155, 0.90,
-                                     color=color, transform=lax.transAxes, clip_on=False))
-        fc = "black" if i < 3 else "white"
-        lax.text(x + 0.077, 0.52, label, ha="center", va="center",
-                 fontsize=8, fontweight="bold", color=fc,
-                 fontfamily="monospace", transform=lax.transAxes)
+    for lon, lat, abbrev in STATE_LABELS:
+        ax.text(lon, lat, abbrev, fontsize=9, color="#2a5575",
+                ha="center", va="center", zorder=6,
+                fontfamily="monospace", fontweight="bold",
+                path_effects=[pe.withStroke(linewidth=2, foreground="#050a10")])
 
     buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig(buf, format="png", dpi=85, bbox_inches="tight", pad_inches=0,
+                facecolor="#050a10")
     buf.seek(0)
     b64 = base64.b64encode(buf.read()).decode()
     plt.close(fig)
     return b64
 
 
-# ── HTML generation ───────────────────────────────────────────────────────────
+# ── HTML ───────────────────────────────────────────────────────────────────────
 def make_html(images, dates, run_label, timestamp):
-    day_labels = ["Day 1 — Today", "Day 2 — Tomorrow", "Day 3", "Day 4", "Day 5"]
+    """
+    images: list of dicts, one per day: {hazard: base64_png_string}
+    dates:  list of date strings, one per day
+    """
+    images_json = json.dumps(images)
+    dates_json  = json.dumps(dates)
+    icons_json  = json.dumps(HAZARD_ICONS)
 
-    sections = []
-    for label, date_str, img in zip(day_labels, dates, images):
-        sections.append(
-            f'<div class="day">'
-            f'<h2>{label} <span class="date">{date_str}</span></h2>'
-            f'<img src="data:image/png;base64,{img}" alt="{date_str} outlook">'
-            f'</div>'
-        )
+    hazard_btns = "\n".join(
+        f'<button class="hbtn{" active" if i == 0 else ""}" '
+        f'data-h="{h}" onclick="setHazard(\'{h}\')">'
+        f'{HAZARD_ICONS[h]} {h.upper()}</button>'
+        for i, h in enumerate(HAZARDS)
+    )
+
+    day_ticks = "\n".join(
+        f'<div class="tick{" active" if i == 0 else ""}" '
+        f'data-i="{i}" onclick="seek({i})">'
+        f'{"TODAY" if i == 0 else "TOMORROW" if i == 1 else f"DAY {i+1}"}</div>'
+        for i in range(FORECAST_DAYS)
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Australia Severe Weather Outlook</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ausweather</title>
 <style>
-  body {{
-    background: #0c1824;
-    color: #b0ccde;
-    font-family: "Courier New", Courier, monospace;
-    margin: 0;
-    padding: 16px;
-  }}
-  h1 {{
-    font-size: 18px;
-    color: #d8eaf8;
-    letter-spacing: 2px;
-    margin-bottom: 4px;
-  }}
-  .meta {{
-    font-size: 11px;
-    color: #4a7090;
-    margin-bottom: 20px;
-  }}
-  .day {{
-    margin-bottom: 32px;
-  }}
-  h2 {{
-    font-size: 13px;
-    color: #d8eaf8;
-    letter-spacing: 1px;
-    margin-bottom: 6px;
-  }}
-  .date {{
-    color: #4a9ed0;
-    font-weight: normal;
-  }}
-  img {{
-    width: 100%;
-    display: block;
-    border: 1px solid #1c3550;
-  }}
-  footer {{
-    font-size: 10px;
-    color: #4a7090;
-    border-top: 1px solid #1c3550;
-    padding-top: 10px;
-    margin-top: 10px;
-  }}
-  footer a {{ color: #3a7090; text-decoration: none; }}
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+
+body {{
+  background: #050a10;
+  color: #fff;
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+}}
+
+/* ── Top HUD ── */
+.hud-top {{
+  position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  padding: 10px 18px;
+  background: linear-gradient(180deg, rgba(5,10,16,0.95) 0%, transparent 100%);
+  pointer-events: none;
+}}
+
+.logo {{
+  font-size: 22px; font-weight: 800; letter-spacing: 3px;
+  color: #fff; text-transform: uppercase;
+}}
+.logo em {{ color: #4dd0e1; font-style: normal; }}
+
+.cs-wrap {{
+  display: flex; align-items: center; gap: 6px;
+}}
+.cs-labels {{
+  display: flex; justify-content: space-between;
+  font-size: 9px; color: #5a8faa; letter-spacing: 1px;
+  margin-bottom: 3px;
+}}
+.cs-bar {{
+  width: 150px; height: 10px; border-radius: 5px;
+  background: linear-gradient(90deg, #004d66, #00bcd4, #4caf50, #ffeb3b, #ff5722, #9c27b0);
+}}
+.cs-text {{
+  display: flex; flex-direction: column;
+}}
+
+.time-info {{
+  margin-left: auto; text-align: right;
+}}
+.time-date {{ font-size: 11px; color: #5a8faa; letter-spacing: 1px; }}
+.time-day  {{ font-size: 14px; font-weight: 600; color: #fff; letter-spacing: 1px; }}
+
+/* ── Map ── */
+#map {{
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}}
+.map-img {{
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  transition: opacity 0.55s ease;
+}}
+#img-b {{ opacity: 0; }}
+
+/* ── Bottom HUD ── */
+.hud-bot {{
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+  padding: 18px 18px 14px;
+  background: linear-gradient(0deg, rgba(5,10,16,0.97) 60%, transparent 100%);
+}}
+
+/* Hazard buttons */
+.hazard-row {{
+  display: flex; justify-content: center; gap: 8px; margin-bottom: 14px;
+}}
+.hbtn {{
+  padding: 7px 18px; border-radius: 20px;
+  border: 1px solid #1a3a50;
+  background: rgba(5,10,16,0.7);
+  color: #5a8faa; font-size: 12px; font-weight: 600; letter-spacing: 0.5px;
+  cursor: pointer; transition: all 0.2s;
+}}
+.hbtn:hover {{ border-color: #4dd0e1; color: #cce8f0; background: rgba(0,30,50,0.8); }}
+.hbtn.active {{
+  background: rgba(0,60,90,0.8); border-color: #4dd0e1; color: #4dd0e1;
+}}
+
+/* Playback row */
+.play-row {{
+  display: flex; align-items: center; gap: 12px;
+}}
+
+.pbtn {{
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  background: rgba(77,208,225,0.12);
+  border: 1.5px solid rgba(77,208,225,0.5);
+  color: #4dd0e1; font-size: 15px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.2s, border-color 0.2s;
+}}
+.pbtn:hover {{ background: rgba(77,208,225,0.25); border-color: #4dd0e1; }}
+
+.timeline {{ flex: 1; }}
+.tl-bar {{
+  height: 4px; background: #0d2035; border-radius: 2px; cursor: pointer;
+  position: relative; margin-bottom: 8px;
+}}
+.tl-fill {{
+  position: absolute; left: 0; top: 0; height: 100%;
+  background: #4dd0e1; border-radius: 2px;
+  transition: width 0.4s ease;
+  pointer-events: none;
+}}
+.tl-dot {{
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #4dd0e1; border: 2px solid #050a10;
+  transition: left 0.4s ease;
+  pointer-events: none;
+}}
+.tl-ticks {{
+  display: flex; justify-content: space-between;
+}}
+.tick {{
+  font-size: 9px; color: #3a6070; letter-spacing: 1px; cursor: pointer;
+  text-align: center; flex: 1; transition: color 0.2s;
+  padding: 2px 0;
+}}
+.tick:hover {{ color: #8ac0d0; }}
+.tick.active {{ color: #4dd0e1; font-weight: 700; }}
+
+/* Source tag */
+.src-tag {{
+  position: fixed; bottom: 8px; right: 14px; z-index: 40;
+  font-size: 9px; color: #1e3a50; letter-spacing: 1px;
+  pointer-events: none;
+}}
 </style>
 </head>
 <body>
-<h1>&#9928; AUSTRALIA SEVERE WEATHER OUTLOOK</h1>
-<div class="meta">Data: {run_label} &nbsp;&bull;&nbsp; Generated: {timestamp} UTC</div>
 
-{''.join(sections)}
+<!-- Top HUD -->
+<div class="hud-top">
+  <div class="logo">Aus<em>weather</em></div>
+  <div class="cs-wrap">
+    <div class="cs-text">
+      <div class="cs-labels"><span>NONE</span><span>MRGL</span><span>SLGT</span><span>ENH</span><span>MDT</span><span>HIGH</span></div>
+      <div class="cs-bar"></div>
+    </div>
+  </div>
+  <div class="time-info">
+    <div class="time-date" id="time-date"></div>
+    <div class="time-day"  id="time-day"></div>
+  </div>
+</div>
 
-<footer>
-  NOT FOR OPERATIONAL USE &nbsp;&bull;&nbsp;
-  For official warnings visit <a href="https://www.bom.gov.au" target="_blank">bom.gov.au</a>
-  &nbsp;&bull;&nbsp; Data: NOAA GFS via AWS Open Data
-</footer>
+<!-- Map crossfade -->
+<div id="map">
+  <img id="img-a" class="map-img" src="" alt="">
+  <img id="img-b" class="map-img" src="" alt="">
+</div>
+
+<!-- Bottom HUD -->
+<div class="hud-bot">
+  <div class="hazard-row">
+    {hazard_btns}
+  </div>
+  <div class="play-row">
+    <button class="pbtn" id="pbtn" onclick="togglePlay()" title="Play / Pause">&#9654;</button>
+    <div class="timeline">
+      <div class="tl-bar" id="tl-bar" onclick="barClick(event)">
+        <div class="tl-fill" id="tl-fill" style="width:0%"></div>
+        <div class="tl-dot"  id="tl-dot"  style="left:0%"></div>
+      </div>
+      <div class="tl-ticks">
+        {day_ticks}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="src-tag">Data: {run_label} &nbsp;·&nbsp; Generated {timestamp} UTC</div>
+
+<script>
+const IMAGES = {images_json};
+const DATES  = {dates_json};
+const ICONS  = {icons_json};
+const HAZARDS = {json.dumps(HAZARDS)};
+const DAY_LABELS = ["TODAY","TOMORROW","DAY 3","DAY 4","DAY 5"];
+
+let curDay = 0, curHazard = HAZARDS[0], playing = true;
+let activeSlot = 'a', timer = null;
+
+function img(id) {{ return document.getElementById('img-' + id); }}
+
+function showFrame(animate) {{
+  const src = 'data:image/png;base64,' + IMAGES[curDay][curHazard];
+  const next = activeSlot === 'a' ? 'b' : 'a';
+
+  if (!animate) {{
+    img('a').style.transition = 'none';
+    img('b').style.transition = 'none';
+  }} else {{
+    img('a').style.transition = 'opacity 0.55s ease';
+    img('b').style.transition = 'opacity 0.55s ease';
+  }}
+
+  img(next).src = src;
+  img(next).style.opacity = '1';
+  img(activeSlot).style.opacity = '0';
+  activeSlot = next;
+
+  // Update HUD
+  document.getElementById('time-date').textContent = DATES[curDay];
+  document.getElementById('time-day').textContent  = DAY_LABELS[curDay];
+
+  const pct = curDay / (DAY_LABELS.length - 1) * 100;
+  document.getElementById('tl-fill').style.width = pct + '%';
+  document.getElementById('tl-dot').style.left   = pct + '%';
+
+  document.querySelectorAll('.tick').forEach((t, i) => {{
+    t.classList.toggle('active', i === curDay);
+  }});
+}}
+
+function setHazard(h) {{
+  curHazard = h;
+  document.querySelectorAll('.hbtn').forEach(b => {{
+    b.classList.toggle('active', b.dataset.h === h);
+  }});
+  showFrame(false);
+}}
+
+function seek(i) {{
+  curDay = i;
+  showFrame(true);
+}}
+
+function barClick(e) {{
+  const rect = document.getElementById('tl-bar').getBoundingClientRect();
+  const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  seek(Math.round(pct * (DAY_LABELS.length - 1)));
+}}
+
+function togglePlay() {{
+  playing = !playing;
+  document.getElementById('pbtn').innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+  if (playing) startTimer();
+  else clearInterval(timer);
+}}
+
+function startTimer() {{
+  clearInterval(timer);
+  timer = setInterval(() => {{
+    curDay = (curDay + 1) % DAY_LABELS.length;
+    showFrame(true);
+  }}, 1600);
+}}
+
+// Kick off
+showFrame(false);
+startTimer();
+</script>
 </body>
 </html>"""
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 58)
-    print("  Australia Severe Weather Outlook  [GFS live data]")
+    print("  Ausweather  [GFS live data]")
     print("=" * 58)
 
     print("\n[1/4] Fetching Australia map geometry...")
@@ -477,12 +666,16 @@ def main():
         if fields.get("apcp") is not None:
             prev_apcp = fields["apcp"].copy()
 
-    print("\n\n[4/4] Rendering graphics...")
+    print(f"\n\n[4/4] Rendering {FORECAST_DAYS * len(HAZARDS)} hazard maps...")
     images = []
-    for day, (risks, date_str) in enumerate(zip(all_risks, dates)):
-        print(f"  Day {day+1}...", end=" ", flush=True)
-        images.append(render_day_image(all_lats, all_lons, risks, date_str, polys, clip_path))
-    print("done")
+    for day, risks in enumerate(all_risks):
+        day_imgs = {}
+        for hazard in HAZARDS:
+            print(f"  Day {day+1} {hazard}...", end=" ", flush=True)
+            day_imgs[hazard] = render_hazard_image(
+                all_lats, all_lons, risks[hazard], polys, clip_path)
+        images.append(day_imgs)
+        print()
 
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
