@@ -40,7 +40,10 @@ if _MAXF:
     FRAME_HOURS = FRAME_HOURS[:_MAXF]
 
 HAZARDS = ["Wind", "Hail", "Flood", "Tornado"]
-HAZARD_ICONS = {"Wind": "💨", "Hail": "🧊", "Flood": "🌊", "Tornado": "🌪"}
+# "Max" = overall threat (highest of the four); rendered as an extra layer.
+DATA_HAZARDS = HAZARDS + ["Max"]
+HAZARD_ICONS = {"Wind": "💨", "Hail": "🧊", "Flood": "🌊", "Tornado": "🌪",
+                "Max": "⚠️", "Radar": "📡"}
 
 RISK_LABELS = ["NONE", "MRGL", "SLGT", "ENH", "MDT", "HIGH"]
 
@@ -278,8 +281,10 @@ def compute_risks(fields):
         if p: m &= (precip_prob >= p)
         tor_risk[m] = l
 
-    return {"Wind": wind_risk, "Hail": hail_risk,
-            "Flood": flood_risk, "Tornado": tor_risk}
+    out = {"Wind": wind_risk, "Hail": hail_risk,
+           "Flood": flood_risk, "Tornado": tor_risk}
+    out["Max"] = np.maximum.reduce([out[h] for h in HAZARDS])
+    return out
 
 
 # ── Map geometry ───────────────────────────────────────────────────────────────
@@ -331,7 +336,7 @@ def city_risks_for_frame(risks, lats, lons):
         ilo = int(np.argmin(np.abs(lons - clon)))
         r1, r2 = max(0, ili-1), min(len(lats), ili+2)
         c1, c2 = max(0, ilo-1), min(len(lons), ilo+2)
-        result[name] = {h: int(risks[h][r1:r2, c1:c2].max()) for h in HAZARDS}
+        result[name] = {h: int(risks[h][r1:r2, c1:c2].max()) for h in DATA_HAZARDS}
     return result
 
 
@@ -341,7 +346,7 @@ def coarse_risks(risks, lats, lons, step=4):
     clons = lons[::step].tolist()
     data  = {h: base64.b64encode(
                  risks[h][::step, ::step].astype(np.uint8).flatten().tobytes()
-             ).decode() for h in HAZARDS}
+             ).decode() for h in DATA_HAZARDS}
     return clats, clons, data
 
 
@@ -398,12 +403,15 @@ def make_html(frames, run_label, timestamp, coarse_lats, coarse_lons):
         for i in range(6)
     )
 
+    profile = {h: [fr["peak"][h] for fr in frames] for h in DATA_HAZARDS}
+
     tpl = _HTML_TEMPLATE
     repl = {
         "__IMAGES__":       json.dumps(images, separators=(",", ":")),
         "__META__":         json.dumps(meta, separators=(",", ":")),
-        "__HAZARDS__":      json.dumps(HAZARDS),
+        "__HAZARDS__":      json.dumps(DATA_HAZARDS),
         "__ICONS__":        json.dumps(HAZARD_ICONS),
+        "__PROFILE__":      json.dumps(profile, separators=(",", ":")),
         "__BOUNDS__":       json.dumps([[LAT0, LON0], [LAT1, LON1]]),
         "__LEGEND__":       legend,
         "__RUNLABEL__":     run_label,
@@ -446,23 +454,28 @@ html,body{height:100%;overflow:hidden;background:#050a10;
   text-shadow:0 2px 10px rgba(0,0,0,.6);white-space:nowrap}
 .brand em{color:#36c5e0;font-style:normal}
 .brand small{display:block;font-size:8px;letter-spacing:3px;color:#5a8faa;font-weight:600;margin-top:1px}
-.legend{margin-left:auto;pointer-events:auto;background:rgba(8,16,24,.80);border:1px solid #15324a;
+.legbox{margin-left:auto;pointer-events:auto;background:rgba(8,16,24,.80);border:1px solid #15324a;
   border-radius:10px;padding:7px 10px;backdrop-filter:blur(8px);flex-shrink:0}
-.legend .lg-title{font-size:8px;letter-spacing:2px;color:#5a8faa;margin-bottom:5px}
-.legend .lg-scale{display:flex;gap:0}
+.legbox .lg-title{font-size:8px;letter-spacing:2px;color:#5a8faa;margin-bottom:5px}
+.lg-scale{display:flex;gap:0}
 .lg-item{font-size:8px;letter-spacing:.4px;color:#9fc4d8;text-align:center;width:36px}
 .lg-sw{display:block;height:7px;border-radius:2px;margin-bottom:3px}
+.radar-legend{display:none}
+.radar-legend.show{display:block}
+.radar-grad{height:7px;width:190px;border-radius:2px;margin-bottom:3px;
+  background:linear-gradient(90deg,#3aa0ff,#19d36b,#e9e337,#ff8a1f,#ff2d2d,#d23bd2)}
+.radar-grad-labels{display:flex;justify-content:space-between;font-size:8px;color:#9fc4d8;letter-spacing:.4px}
 
 /* ── Alert banner ── */
 .alert{position:fixed;top:54px;left:50%;transform:translateX(-50%);z-index:480;
   display:none;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:1px;
-  padding:6px 16px;border-radius:20px;border:1px solid;backdrop-filter:blur(8px);white-space:nowrap}
+  padding:6px 16px;border-radius:20px;border:1px solid;backdrop-filter:blur(8px);white-space:nowrap;
+  max-width:92vw;overflow:hidden;text-overflow:ellipsis}
 .alert.show{display:flex}
 .alert-3{background:rgba(255,226,59,.12);border-color:rgba(255,226,59,.4);color:#ffe23b}
 .alert-4{background:rgba(255,106,31,.15);border-color:rgba(255,106,31,.5);color:#ff9040}
 .alert-5{background:rgba(192,38,211,.18);border-color:rgba(192,38,211,.55);color:#d060e0}
-.alert .dot{width:6px;height:6px;border-radius:50%;background:currentColor;
-  animation:blink 1.2s infinite}
+.alert .dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:blink 1.2s infinite;flex:0 0 auto}
 @keyframes blink{0%,100%{opacity:.3}50%{opacity:1}}
 
 /* ── Left icon buttons ── */
@@ -472,7 +485,7 @@ html,body{height:100%;overflow:hidden;background:#050a10;
 .icon-btn:hover{border-color:#36c5e0;color:#cdeefb}
 .icon-btn.on{border-color:#36c5e0;color:#36c5e0;background:rgba(0,40,60,.65)}
 .left-stack{position:fixed;top:60px;left:14px;z-index:500;display:flex;flex-direction:column;gap:8px}
-.zoom-pair{display:flex;flex-direction:column;gap:0}
+.zoom-pair{display:flex;flex-direction:column}
 .zoom-pair .icon-btn:first-child{border-radius:10px 10px 4px 4px;border-bottom-width:.5px}
 .zoom-pair .icon-btn:last-child {border-radius:4px 4px 10px 10px;border-top-width:.5px}
 
@@ -483,10 +496,10 @@ html,body{height:100%;overflow:hidden;background:#050a10;
   padding:5px 12px;backdrop-filter:blur(8px);pointer-events:none}
 .radar-flag.show{display:flex}
 .radar-flag .dot{width:6px;height:6px;border-radius:50%;background:#36c5e0;animation:blink 1.4s infinite}
-.radar-flag .rtime{margin-left:4px;opacity:.75}
+.radar-flag .rtime{margin-left:4px;opacity:.78}
 
 /* ── Layers panel ── */
-.panel{position:fixed;right:14px;bottom:155px;z-index:600;width:220px;
+.panel{position:fixed;right:14px;bottom:172px;z-index:600;width:222px;
   background:rgba(9,17,26,.97);border:1px solid #163450;border-radius:14px;
   padding:14px 14px 10px;backdrop-filter:blur(12px);display:none;
   box-shadow:0 10px 40px rgba(0,0,0,.55)}
@@ -495,7 +508,6 @@ html,body{height:100%;overflow:hidden;background:#050a10;
 .prow{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}
 .prow:last-child{margin-bottom:0}
 .prow label{font-size:12px;color:#cfe6f2}
-.prow .sub{font-size:10px;color:#5a8faa;margin-top:1px}
 .sw{position:relative;width:38px;height:21px;border-radius:11px;background:#1a3145;
   cursor:pointer;transition:.2s;flex:0 0 auto}
 .sw.on{background:#0c6d8c}
@@ -507,16 +519,20 @@ html,body{height:100%;overflow:hidden;background:#050a10;
 
 /* ── Bottom HUD ── */
 .bottom{position:fixed;left:0;right:0;bottom:0;z-index:500;padding:12px 14px 10px;
-  background:linear-gradient(0deg,rgba(5,10,16,.97) 60%,rgba(5,10,16,0));pointer-events:none}
+  background:linear-gradient(0deg,rgba(5,10,16,.97) 62%,rgba(5,10,16,0));pointer-events:none}
 .bottom>*{pointer-events:auto}
 .hazard-bar{display:flex;justify-content:center;margin-bottom:10px}
-.hsel{display:flex;gap:5px;background:rgba(8,16,24,.82);border:1px solid #15324a;border-radius:24px;
-  padding:4px;backdrop-filter:blur(8px)}
+.hsel{display:flex;gap:4px;background:rgba(8,16,24,.82);border:1px solid #15324a;border-radius:24px;
+  padding:4px;backdrop-filter:blur(8px);max-width:96vw;overflow-x:auto;scrollbar-width:none}
+.hsel::-webkit-scrollbar{display:none}
 .hbtn{border:0;background:none;color:#7ba6bd;font-size:12px;font-weight:700;letter-spacing:.5px;
-  padding:6px 14px;border-radius:18px;cursor:pointer;transition:.15s;white-space:nowrap}
+  padding:6px 13px;border-radius:18px;cursor:pointer;transition:.15s;white-space:nowrap;flex:0 0 auto}
 .hbtn:hover{color:#cdeefb}
 .hbtn.active{background:linear-gradient(180deg,#0a4d66,#073549);color:#5fe0f5;
   box-shadow:0 0 0 1px #1c6f8c inset}
+.hbtn.radar.active{background:linear-gradient(180deg,#0a3a66,#062a49);color:#7fb6ff;
+  box-shadow:0 0 0 1px #1c5a8c inset}
+
 .scrub-row{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:10px}
 .pbtn{flex:0 0 auto;width:40px;height:40px;border-radius:50%;border:1.5px solid rgba(54,197,224,.55);
   background:rgba(54,197,224,.14);color:#5fe0f5;font-size:15px;cursor:pointer;display:flex;
@@ -526,16 +542,26 @@ html,body{height:100%;overflow:hidden;background:#050a10;
   background:rgba(8,16,24,.7);color:#9fc4d8;cursor:pointer;font-size:11px;display:flex;
   align-items:center;justify-content:center}
 .sbtn:hover{border-color:#36c5e0;color:#cdeefb}
-.tl{flex:1 1 auto}
+.tl{flex:1 1 auto;min-width:0}
 .tl-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
-.tl-time{font-size:13px;font-weight:700;letter-spacing:.3px;color:#eaf6ff}
+.tl-time{font-size:13px;font-weight:700;letter-spacing:.3px;color:#eaf6ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tl-time b{color:#5fe0f5}
-.tl-meta{display:flex;gap:10px;align-items:center}
+.tl-time .tag{font-size:9px;font-weight:700;letter-spacing:1px;padding:1px 6px;border-radius:4px;margin-right:6px;
+  background:#0c4a63;color:#7fe3ff;vertical-align:middle}
+.tl-time .tag.obs{background:#10406a;color:#7fb6ff}
+.tl-meta{display:flex;gap:10px;align-items:center;flex:0 0 auto}
 .tl-utc{font-size:10px;color:#5a8faa;letter-spacing:.4px}
 .speed-wrap{display:flex;align-items:center;gap:5px;font-size:9px;color:#3f6377}
 .speed-wrap input{width:52px;accent-color:#36c5e0}
+
+/* risk profile strip */
+.strip{display:flex;gap:1px;height:7px;margin:3px 0 1px;border-radius:3px;overflow:hidden;cursor:pointer}
+.strip.hide{display:none}
+.seg{flex:1 1 0;background:#13202f;transition:background .25s,transform .15s}
+.seg.cur{transform:scaleY(1.7)}
+
 input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:5px;border-radius:3px;
-  background:#0e2436;outline:none;margin:7px 0;cursor:pointer}
+  background:#0e2436;outline:none;margin:6px 0 4px;cursor:pointer}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;
   border-radius:50%;background:#5fe0f5;border:2px solid #04222e;box-shadow:0 0 7px rgba(95,224,245,.6);cursor:pointer}
 input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#5fe0f5;
@@ -547,25 +573,26 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 
 /* ── City markers ── */
 .city-icon{background:none!important;border:none!important;overflow:visible!important}
-.city-pin{display:flex;flex-direction:column;align-items:center;pointer-events:auto;cursor:default}
+.city-pin{display:flex;flex-direction:column;align-items:center;cursor:pointer}
 .city-dot{width:9px;height:9px;border-radius:50%;border:2px solid #050a10;
   background:var(--c,#2a3a48);box-shadow:0 0 6px var(--c,transparent);transition:.3s}
 .city-label{margin-top:2px;text-align:center;background:rgba(5,10,16,.72);
   border:1px solid rgba(255,255,255,.1);border-radius:5px;padding:2px 5px;
-  line-height:1.3;white-space:nowrap;pointer-events:none;backdrop-filter:blur(4px)}
+  line-height:1.25;white-space:nowrap;backdrop-filter:blur(4px)}
 .city-name{display:block;font-size:8px;font-weight:700;letter-spacing:.5px;color:#9fc4d8}
 .city-risk{display:block;font-size:8px;font-weight:800;color:var(--c,#5a8faa)}
 
-/* ── Click popup ── */
+/* ── Popup ── */
 .leaflet-popup-content-wrapper.risk-popup-wrap{
-  background:rgba(9,17,26,.95);border:1px solid #1e405a;border-radius:10px;
+  background:rgba(9,17,26,.96);border:1px solid #1e405a;border-radius:10px;
   color:#eaf6ff;padding:0;box-shadow:0 8px 30px rgba(0,0,0,.5)}
-.leaflet-popup-tip{background:rgba(9,17,26,.95)!important}
+.leaflet-popup-tip{background:rgba(9,17,26,.96)!important}
 .leaflet-popup-content{margin:0!important}
-.popup-inner{padding:10px 14px;min-width:150px}
-.popup-hdr{font-size:9px;letter-spacing:2px;color:#5a8faa;margin-bottom:8px}
+.popup-inner{padding:10px 14px;min-width:158px}
+.popup-hdr{font-size:9px;letter-spacing:1.5px;color:#5a8faa;margin-bottom:8px}
 .popup-row{display:flex;justify-content:space-between;align-items:center;
   padding:3px 0;border-bottom:1px solid #142032;font-size:12px}
+.popup-row.tot{border-bottom:none;border-top:1px solid #1e405a;margin-top:3px;padding-top:5px}
 .popup-row:last-child{border-bottom:none}
 .popup-row .ph{color:#9fc4d8}
 .popup-row .pv{font-weight:800;font-size:11px}
@@ -574,13 +601,14 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .modal{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;
   background:rgba(2,6,10,.72);backdrop-filter:blur(4px);padding:20px}
 .modal.show{display:flex}
-.card{max-width:430px;background:#0a1622;border:1px solid #173552;border-radius:16px;padding:22px;
-  box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.card{max-width:440px;background:#0a1622;border:1px solid #173552;border-radius:16px;padding:22px;
+  box-shadow:0 20px 60px rgba(0,0,0,.6);max-height:88vh;overflow-y:auto}
 .card h2{font-size:16px;letter-spacing:1px;margin-bottom:3px}
 .card h2 em{color:#36c5e0;font-style:normal}
 .card .sub{font-size:9px;letter-spacing:2.5px;color:#5a8faa;margin-bottom:13px}
 .card p{font-size:12px;line-height:1.65;color:#bcd6e6;margin-bottom:9px}
 .card a{color:#5fe0f5;text-decoration:none}
+.card kbd{background:#13283a;border:1px solid #1e405a;border-radius:4px;padding:0 5px;font-size:11px;color:#cdeefb}
 .card .close{margin-top:6px;width:100%;padding:9px;border:0;border-radius:9px;
   background:#0c6d8c;color:#eaf6ff;font-size:13px;font-weight:700;cursor:pointer}
 .card .close:hover{background:#0d7ea1}
@@ -589,8 +617,8 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .leaflet-control-attribution{font-size:9px!important;background:rgba(5,10,16,.55)!important;color:#456!important}
 .leaflet-control-attribution a{color:#5a8faa!important}
 @media(max-width:640px){
-  .brand{font-size:16px}.legend{display:none}
-  .panel{right:8px;bottom:170px;width:200px}
+  .brand{font-size:16px}.legbox{display:none}
+  .panel{right:8px;bottom:188px;width:204px}
   .hbtn{padding:5px 10px;font-size:11px}
   .speed-wrap{display:none}
 }
@@ -604,9 +632,16 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   <div>
     <div class="brand">Aus<em>weather</em><small>SEVERE WEATHER · LIVE RADAR</small></div>
   </div>
-  <div class="legend">
-    <div class="lg-title">RISK SCALE</div>
-    <div class="lg-scale">__LEGEND__</div>
+  <div class="legbox">
+    <div id="riskLegend">
+      <div class="lg-title">RISK SCALE</div>
+      <div class="lg-scale">__LEGEND__</div>
+    </div>
+    <div class="radar-legend" id="radarLegend">
+      <div class="lg-title">RADAR · PRECIP INTENSITY</div>
+      <div class="radar-grad"></div>
+      <div class="radar-grad-labels"><span>LIGHT</span><span>MOD</span><span>HEAVY</span><span>INTENSE</span></div>
+    </div>
   </div>
 </div>
 
@@ -617,6 +652,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 <div class="left-stack">
   <button class="icon-btn" id="infoBtn" title="About">&#9432;</button>
   <button class="icon-btn" id="locBtn"  title="My location">&#9678;</button>
+  <button class="icon-btn" id="fsBtn"   title="Fullscreen">&#9974;</button>
   <button class="icon-btn" id="layerBtn" title="Layers">&#9783;</button>
   <div class="zoom-pair">
     <button class="icon-btn" id="zoomIn"  title="Zoom in">+</button>
@@ -635,11 +671,11 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 <div class="panel" id="panel">
   <h4>Layers</h4>
   <div class="prow"><label>Risk overlay</label><div class="sw on" id="swRisk"></div></div>
-  <div class="prow"><div><label>Risk opacity</label></div><input type="range" class="slider-sm" id="riskOpac" min="20" max="100" value="85"></div>
+  <div class="prow"><label>Risk opacity</label><input type="range" class="slider-sm" id="riskOpac" min="20" max="100" value="85"></div>
   <div class="pdiv"></div>
-  <div class="prow"><label>Live radar</label><div class="sw on" id="swRadar"></div></div>
+  <div class="prow"><label>Radar underlay</label><div class="sw on" id="swRadar"></div></div>
   <div class="prow"><label>Satellite IR</label><div class="sw" id="swSatIR"></div></div>
-  <div class="prow"><div><label>Radar opacity</label></div><input type="range" class="slider-sm" id="radarOpac" min="10" max="100" value="70"></div>
+  <div class="prow"><label>Radar opacity</label><input type="range" class="slider-sm" id="radarOpac" min="10" max="100" value="70"></div>
   <div class="pdiv"></div>
   <div class="prow"><label>Satellite map</label><div class="sw" id="swSatMap"></div></div>
   <div class="prow"><label>City markers</label><div class="sw on" id="swCities"></div></div>
@@ -657,12 +693,11 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
         <div class="tl-time" id="timeMain">—</div>
         <div class="tl-meta">
           <span class="tl-utc" id="timeUtc"></span>
-          <span class="speed-wrap">
-            <span>SPEED</span>
-            <input type="range" id="speedCtrl" min="1" max="10" value="5" title="Playback speed">
-          </span>
+          <span class="speed-wrap"><span>SPEED</span>
+            <input type="range" id="speedCtrl" min="1" max="10" value="5" title="Playback speed"></span>
         </div>
       </div>
+      <div class="strip" id="strip"></div>
       <input type="range" id="scrub" min="0" max="__NFRAMES__" value="0">
       <div class="dayticks" id="dayticks"></div>
     </div>
@@ -675,15 +710,18 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   <div class="card">
     <h2>Aus<em>weather</em></h2>
     <div class="sub">5-DAY SEVERE WEATHER OUTLOOK</div>
-    <p>Hour-by-hour severe weather risk for Australia — <b>wind, hail, flood and tornado</b> —
-       derived from the NOAA GFS global forecast model, overlaid on live precipitation radar.</p>
-    <p>Use the timeline to step through forecast hours. The &#9678; button flies to your GPS location.
-       Click anywhere on the map to inspect local risk levels. Toggle layers with &#9783;.</p>
+    <p>Hour-by-hour severe weather risk for Australia — <b>wind, hail, flood and tornado</b> — from the
+       NOAA GFS model, plus a live <b>radar</b> mode and infrared satellite.</p>
+    <p>Pick a hazard or <b>Max</b> (overall threat). Tap <b>📡 Radar</b> for the live precipitation loop.
+       The bar under the timeline shows when risk peaks — click it or the day labels to jump. Click the map
+       or a city for a local breakdown.</p>
+    <p style="color:#8aabb8">Shortcuts: <kbd>Space</kbd> play · <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> step ·
+       the &#9678; button flies to your location.</p>
     <p style="color:#7e98a8;font-size:11px">Risk levels are computed from model fields and are
        <b>not official warnings</b>. For authoritative forecasts visit
        <a href="https://www.bom.gov.au" target="_blank" rel="noopener">bom.gov.au</a>.</p>
     <p style="color:#5a7488;font-size:10px">Data: __RUNLABEL__ &middot; generated __TIMESTAMP__ UTC
-       &middot; radar &copy; RainViewer &middot; map &copy; CARTO/OSM/ESRI</p>
+       &middot; radar &copy; RainViewer &middot; map &copy; CARTO/OSM/Esri</p>
     <button class="close" id="closeBtn">Got it</button>
   </div>
 </div>
@@ -691,309 +729,313 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 <script>
 const IMAGES      = __IMAGES__;
 const META        = __META__;
-const HAZARDS     = __HAZARDS__;
+const HAZARDS     = __HAZARDS__;       // 5: Wind,Hail,Flood,Tornado,Max
 const ICONS       = __ICONS__;
 const BOUNDS      = __BOUNDS__;
 const RISK_COLORS = __RISK_COLORS__;
 const RISK_LABELS = ["NONE","MRGL","SLGT","ENH","MDT","HIGH"];
-const CITIES      = __CITIES__;       // [[name, lat, lon], ...]
-const CITY_RISKS  = __CITY_RISKS__;   // [frame][cityName][hazard]
-const COARSE      = __COARSE__;       // [frame][hazard] = base64 bytes
+const CITIES      = __CITIES__;
+const CITY_RISKS  = __CITY_RISKS__;
+const COARSE      = __COARSE__;
 const COARSE_LATS = __COARSE_LATS__;
 const COARSE_LONS = __COARSE_LONS__;
-const COARSE_SHAPE= __COARSE_SHAPE__; // [nLats, nLons]
+const COARSE_SHAPE= __COARSE_SHAPE__;
+const PROFILE     = __PROFILE__;       // {hazard:[peakPerFrame]}
 const N = META.length;
+const REAL_HAZARDS = HAZARDS.filter(h=>h!=='Max');
+const MODES = HAZARDS.concat(['Radar']);
 const LAT0=BOUNDS[0][0], LON0=BOUNDS[0][1], LAT1=BOUNDS[1][0], LON1=BOUNDS[1][1];
 
-let curFrame=0, curHazard=HAZARDS[0], playing=false, playTimer=null, playInterval=650;
+let mode='forecast', curHazard=HAZARDS[0], curFrame=0, rIdx=0;
+let playing=false, playTimer=null, playInterval=650;
+let riskOn=true, riskOpac=.85, radarOpacity=.70;
+let radarUnderlay=true, satIROn=false;
 
 /* ── Map ── */
-const map = L.map('map',{zoomControl:false,attributionControl:true,
+const map=L.map('map',{zoomControl:false,attributionControl:true,
   minZoom:3,maxZoom:13,zoomSnap:.25,inertia:true}).fitBounds(BOUNDS);
-
 map.createPane('radarPane');
-map.getPane('radarPane').style.zIndex = 350;
-map.getPane('radarPane').style.pointerEvents = 'none';
+map.getPane('radarPane').style.zIndex=350;
+map.getPane('radarPane').style.pointerEvents='none';
 
-const tileOpts = {subdomains:'abcd',maxZoom:19};
-const baseDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-  {attribution:'&copy; OpenStreetMap &copy; CARTO',...tileOpts}).addTo(map);
-const baseSat  = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-  {attribution:'&copy; Esri &mdash; Esri, i-cubed, USDA, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP and the GIS User Community',
-   maxZoom:19,pane:'tilePane'});
-const labels   = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-  {pane:'markerPane',...tileOpts}).addTo(map);
+const tOpt={subdomains:'abcd',maxZoom:19};
+const baseDark=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
+  {attribution:'&copy; OSM &copy; CARTO',...tOpt}).addTo(map);
+const baseSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  {attribution:'&copy; Esri',maxZoom:19,pane:'tilePane'});
+const labels=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
+  {pane:'markerPane',...tOpt}).addTo(map);
 
-/* ── Risk overlay (crossfade pair) ── */
+/* ── Risk overlay crossfade pair ── */
 function dataUri(b64){return 'data:image/png;base64,'+b64;}
-let ovA=L.imageOverlay(dataUri(IMAGES[0][curHazard]),BOUNDS,
-  {opacity:.85,className:'risk-overlay',interactive:false}).addTo(map);
-let ovB=L.imageOverlay(dataUri(IMAGES[0][curHazard]),BOUNDS,
-  {opacity:0,className:'risk-overlay',interactive:false}).addTo(map);
-let ovTop=ovA, riskOn=true, riskOpac=.85;
+let ovA=L.imageOverlay(dataUri(IMAGES[0][curHazard]),BOUNDS,{opacity:.85,className:'risk-overlay',interactive:false}).addTo(map);
+let ovB=L.imageOverlay(dataUri(IMAGES[0][curHazard]),BOUNDS,{opacity:0,className:'risk-overlay',interactive:false}).addTo(map);
+let ovTop=ovA;
 
-function showFrame(i, animate){
-  curFrame = (i+N)%N;
-  const uri = dataUri(IMAGES[curFrame][curHazard]);
-  const back = (ovTop===ovA)?ovB:ovA;
+/* ── Forecast frame ── */
+function showForecast(i,animate){
+  curFrame=(i+N)%N;
+  const uri=dataUri(IMAGES[curFrame][curHazard]);
+  const back=(ovTop===ovA)?ovB:ovA;
   back.setUrl(uri);
-  if(animate){
-    back.setOpacity(riskOn?riskOpac:0);
-    ovTop.setOpacity(0);
-    ovTop=back;
-  } else {
-    ovA.setUrl(uri); ovB.setUrl(uri);
-    ovTop.setOpacity(riskOn?riskOpac:0);
-    back.setOpacity(0);
-  }
-  const m = META[curFrame];
-  document.getElementById('timeMain').innerHTML = m.local;
-  document.getElementById('timeUtc').textContent = m.utc;
-  document.getElementById('scrub').value = curFrame;
-  updateDayticks();
-  updateCityMarkers();
-  updateAlert();
+  if(animate){back.setOpacity(riskOn?riskOpac:0);ovTop.setOpacity(0);ovTop=back;}
+  else{ovA.setUrl(uri);ovB.setUrl(uri);ovTop.setOpacity(riskOn?riskOpac:0);back.setOpacity(0);}
+  const m=META[curFrame];
+  document.getElementById('timeMain').innerHTML=
+    '<span class="tag">FORECAST</span>'+m.local;
+  document.getElementById('timeUtc').textContent=m.utc;
+  document.getElementById('scrub').value=curFrame;
+  updateDayticks();updateStripCursor();updateCityMarkers();updateAlert();syncHash();
 }
 
-/* ── Hazard selector ── */
-const hsel = document.getElementById('hsel');
-HAZARDS.forEach(h=>{
+/* ── Hazard / mode selector ── */
+const hsel=document.getElementById('hsel');
+MODES.forEach(h=>{
   const b=document.createElement('button');
-  b.className='hbtn'+(h===curHazard?' active':'');
-  b.innerHTML=(ICONS[h]||'')+' '+h.toUpperCase();
-  b.onclick=()=>{
-    curHazard=h;
-    [...hsel.children].forEach(c=>c.classList.toggle('active',c===b));
-    showFrame(curFrame,false);
-  };
+  b.className='hbtn'+(h==='Radar'?' radar':'')+(h===curHazard?' active':'');
+  b.dataset.h=h;
+  b.innerHTML=(ICONS[h]||'')+' '+(h==='Max'?'MAX':h.toUpperCase());
+  b.onclick=()=>selectMode(h);
   hsel.appendChild(b);
 });
+function highlightMode(h){
+  [...hsel.children].forEach(c=>c.classList.toggle('active',c.dataset.h===h));
+}
+function selectMode(h){
+  if(h==='Radar'){enterRadar();highlightMode('Radar');return;}
+  if(mode==='radar') exitRadar();
+  curHazard=h;highlightMode(h);
+  buildStrip();
+  document.getElementById('riskLegend').style.display='';
+  document.getElementById('radarLegend').classList.remove('show');
+  showForecast(curFrame,false);
+}
 
-/* ── Timeline ── */
+/* ── Timeline / dayticks ── */
 const scrub=document.getElementById('scrub');
 scrub.max=N-1;
-scrub.oninput=()=>{stop();showFrame(parseInt(scrub.value),false);};
-document.getElementById('prevBtn').onclick=()=>{stop();showFrame(curFrame-1,true);};
-document.getElementById('nextBtn').onclick=()=>{stop();showFrame(curFrame+1,true);};
+scrub.oninput=()=>{stop();const v=parseInt(scrub.value);
+  if(mode==='radar')showRadar(v);else showForecast(v,false);};
+document.getElementById('prevBtn').onclick=()=>{stop();step(-1);};
+document.getElementById('nextBtn').onclick=()=>{stop();step(1);};
+function step(d){if(mode==='radar'){const n=radarCount();if(n)showRadar((rIdx+d+n)%n);}
+  else showForecast(curFrame+d,true);}
 
 const dayFirst={};
-META.forEach((m,i)=>{ if(!(m.day in dayFirst)) dayFirst[m.day]=i; });
-
+META.forEach((m,i)=>{if(!(m.day in dayFirst))dayFirst[m.day]=i;});
 function buildDayticks(){
   const wrap=document.getElementById('dayticks');
-  const dayName=['TODAY','TOMORROW','DAY 3','DAY 4','DAY 5','DAY 6'];
+  const names=['TODAY','TOMORROW','DAY 3','DAY 4','DAY 5','DAY 6'];
   wrap.innerHTML='';
   Object.keys(dayFirst).forEach(d=>{
-    const el=document.createElement('div');
-    el.className='dt'; el.dataset.day=d;
-    el.textContent=dayName[d]||('DAY '+(parseInt(d)+1));
-    el.title='Jump to '+el.textContent;
-    el.onclick=()=>{stop();showFrame(dayFirst[d],true);};
+    const el=document.createElement('div');el.className='dt';el.dataset.day=d;
+    el.textContent=names[d]||('DAY '+(parseInt(d)+1));
+    el.onclick=()=>{if(mode==='radar')return;stop();showForecast(dayFirst[d],true);};
     wrap.appendChild(el);
   });
 }
-function updateDayticks(){
-  const d=META[curFrame].day;
-  document.querySelectorAll('.dt').forEach(e=>e.classList.toggle('on',e.dataset.day==d));
-}
+function updateDayticks(){const d=META[curFrame].day;
+  document.querySelectorAll('.dt').forEach(e=>e.classList.toggle('on',e.dataset.day==d));}
 buildDayticks();
+
+/* ── Risk profile strip ── */
+const stripEl=document.getElementById('strip');
+function buildStrip(){
+  stripEl.classList.remove('hide');
+  const prof=PROFILE[curHazard]||[];
+  stripEl.innerHTML='';
+  for(let i=0;i<N;i++){
+    const s=document.createElement('div');s.className='seg';
+    s.style.background=RISK_COLORS[prof[i]||0];
+    s.onclick=()=>{stop();showForecast(i,true);};
+    stripEl.appendChild(s);
+  }
+}
+function updateStripCursor(){
+  [...stripEl.children].forEach((s,i)=>s.classList.toggle('cur',i===curFrame));
+}
 
 /* ── Playback ── */
 const playBtn=document.getElementById('playBtn');
 document.getElementById('speedCtrl').oninput=function(){
-  playInterval=Math.round(1400-this.value*120);
-  if(playing){stop();play();}
-};
+  playInterval=Math.round(1400-this.value*120);if(playing){stop();play();}};
 function play(){playing=true;playBtn.innerHTML='&#10074;&#10074;';
-  playTimer=setInterval(()=>showFrame(curFrame+1,true),playInterval);}
+  playTimer=setInterval(()=>step(1),playInterval);}
 function stop(){playing=false;playBtn.innerHTML='&#9654;';clearInterval(playTimer);}
 playBtn.onclick=()=>{playing?stop():play();};
 
-/* ── Zoom ── */
-document.getElementById('zoomIn') .onclick=()=>map.zoomIn();
+/* ── Zoom / fullscreen ── */
+document.getElementById('zoomIn').onclick=()=>map.zoomIn();
 document.getElementById('zoomOut').onclick=()=>map.zoomOut();
+document.getElementById('fsBtn').onclick=()=>{
+  if(!document.fullscreenElement)document.documentElement.requestFullscreen?.();
+  else document.exitFullscreen?.();};
 
 /* ── City markers ── */
-const cityMarkers = CITIES.map(([name,lat,lon])=>{
-  const m=L.marker([lat,lon],{icon:cityIcon(name,0),zIndexOffset:100,interactive:false});
-  m.addTo(map);
-  return m;
-});
-let citiesOn=true;
 function cityIcon(name,risk){
   const c=RISK_COLORS[risk]||'#2a3a48';
-  return L.divIcon({
-    className:'city-icon',
-    html:`<div class="city-pin" style="--c:${c}">
-      <div class="city-dot"></div>
-      <div class="city-label" style="--c:${c}">
-        <span class="city-name">${name}</span>
-        ${risk>0?`<span class="city-risk">${RISK_LABELS[risk]}</span>`:''}
-      </div>
-    </div>`,
-    iconSize:[0,0],iconAnchor:[0,0]
-  });
+  return L.divIcon({className:'city-icon',iconSize:[0,0],iconAnchor:[0,0],
+    html:'<div class="city-pin" style="--c:'+c+'"><div class="city-dot"></div>'+
+      '<div class="city-label" style="--c:'+c+'"><span class="city-name">'+name+'</span>'+
+      (risk>0?'<span class="city-risk">'+RISK_LABELS[risk]+'</span>':'')+'</div></div>'});
 }
+const cityMarkers=CITIES.map(([name,lat,lon])=>{
+  const mk=L.marker([lat,lon],{icon:cityIcon(name,0),zIndexOffset:100});
+  mk.on('click',()=>{
+    map.flyTo([lat,lon],8,{duration:1});
+    if(mode!=='radar')openCityPopup(name,lat,lon);
+  });
+  return mk.addTo(map);
+});
+let citiesOn=true;
 function updateCityMarkers(){
-  if(!citiesOn||!CITY_RISKS[curFrame]) return;
+  if(!citiesOn||mode==='radar'||!CITY_RISKS[curFrame])return;
   CITIES.forEach(([name],i)=>{
-    const r=CITY_RISKS[curFrame][name]?.[curHazard]||0;
+    const r=(CITY_RISKS[curFrame][name]||{})[curHazard]||0;
     cityMarkers[i].setIcon(cityIcon(name,r));
   });
 }
 
 /* ── Alert banner ── */
 function updateAlert(){
-  const cr=CITY_RISKS[curFrame];
-  if(!cr){document.getElementById('alert').classList.remove('show');return;}
-  let max=0,maxH='',maxCities=[];
-  HAZARDS.forEach(h=>{
-    CITIES.forEach(([name])=>{
-      const r=cr[name]?.[h]||0;
-      if(r>max){max=r;maxH=h;maxCities=[name];}
-      else if(r===max&&r>=3) maxCities.push(name);
-    });
-  });
   const el=document.getElementById('alert');
-  if(max>=3){
-    el.className='alert show alert-'+max;
+  if(mode==='radar'||!CITY_RISKS[curFrame]){el.classList.remove('show');return;}
+  const cr=CITY_RISKS[curFrame];let max=0,maxH='',cs=[];
+  REAL_HAZARDS.forEach(h=>CITIES.forEach(([name])=>{
+    const r=(cr[name]||{})[h]||0;
+    if(r>max){max=r;maxH=h;cs=[name];}
+    else if(r===max&&r>=3&&!cs.includes(name))cs.push(name);
+  }));
+  if(max>=3){el.className='alert show alert-'+max;
     document.getElementById('alertTxt').textContent=
-      RISK_LABELS[max]+' '+maxH.toUpperCase()+' — '+maxCities.slice(0,3).join(', ');
-  } else {
-    el.classList.remove('show');
-  }
+      RISK_LABELS[max]+' '+maxH.toUpperCase()+' — '+cs.slice(0,3).join(', ');}
+  else el.classList.remove('show');
 }
 
-/* ── Click-to-inspect popup ── */
+/* ── Popups ── */
+function riskRows(getR){
+  let rows='';
+  REAL_HAZARDS.forEach(h=>{const r=getR(h);
+    rows+='<div class="popup-row"><span class="ph">'+(ICONS[h]||'')+' '+h+
+      '</span><span class="pv" style="color:'+RISK_COLORS[r]+'">'+RISK_LABELS[r]+'</span></div>';});
+  const mx=getR('Max');
+  rows+='<div class="popup-row tot"><span class="ph">⚠️ Overall</span>'+
+    '<span class="pv" style="color:'+RISK_COLORS[mx]+'">'+RISK_LABELS[mx]+'</span></div>';
+  return rows;
+}
 const coarseCache={};
 function coarseGet(frame,hazard,iLat,iLon){
   const key=frame+'_'+hazard;
-  if(!coarseCache[key]){
-    const s=atob(COARSE[frame][hazard]);
-    const a=new Uint8Array(s.length);
-    for(let i=0;i<s.length;i++) a[i]=s.charCodeAt(i);
-    coarseCache[key]=a;
-  }
-  const idx=iLat*COARSE_SHAPE[1]+iLon;
-  return coarseCache[key][idx]||0;
+  if(!coarseCache[key]){const s=atob(COARSE[frame][hazard]);
+    const a=new Uint8Array(s.length);for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);coarseCache[key]=a;}
+  return coarseCache[key][iLat*COARSE_SHAPE[1]+iLon]||0;
 }
-function nearest1d(arr,val){
-  let best=0,bd=1e9;
-  for(let i=0;i<arr.length;i++){const d=Math.abs(arr[i]-val);if(d<bd){bd=d;best=i;}}
-  return best;
+function nearest1d(arr,v){let b=0,bd=1e9;for(let i=0;i<arr.length;i++){const d=Math.abs(arr[i]-v);if(d<bd){bd=d;b=i;}}return b;}
+function openCityPopup(name,lat,lon){
+  const cr=(CITY_RISKS[curFrame]||{})[name]||{};
+  L.popup({className:'risk-popup-wrap',maxWidth:210,autoPanPadding:L.point(20,90)})
+   .setLatLng([lat,lon])
+   .setContent('<div class="popup-inner"><div class="popup-hdr">'+name.toUpperCase()+' · '+META[curFrame].utc+
+     '</div>'+riskRows(h=>cr[h]||0)+'</div>').openOn(map);
 }
 map.on('click',e=>{
-  const lat=e.latlng.lat, lon=e.latlng.lng;
-  if(lat<LAT0||lat>LAT1||lon<LON0||lon>LON1) return;
-  const iLat=nearest1d(COARSE_LATS,lat);
-  const iLon=nearest1d(COARSE_LONS,lon);
-  let rows='';
-  HAZARDS.forEach(h=>{
-    const r=coarseGet(curFrame,h,iLat,iLon);
-    const c=RISK_COLORS[r];
-    rows+=`<div class="popup-row"><span class="ph">${ICONS[h]||''} ${h}</span>
-      <span class="pv" style="color:${c}">${RISK_LABELS[r]}</span></div>`;
-  });
-  const m=META[curFrame];
-  L.popup({className:'risk-popup-wrap',closeButton:true,maxWidth:200,
-           autoPanPadding:L.point(20,80)})
+  if(mode==='radar')return;
+  const lat=e.latlng.lat,lon=e.latlng.lng;
+  if(lat<LAT0||lat>LAT1||lon<LON0||lon>LON1)return;
+  const iLat=nearest1d(COARSE_LATS,lat),iLon=nearest1d(COARSE_LONS,lon);
+  L.popup({className:'risk-popup-wrap',maxWidth:210,autoPanPadding:L.point(20,90)})
    .setLatLng(e.latlng)
-   .setContent(`<div class="popup-inner">
-     <div class="popup-hdr">${m.utc}</div>${rows}</div>`)
-   .openOn(map);
+   .setContent('<div class="popup-inner"><div class="popup-hdr">'+META[curFrame].utc+
+     '</div>'+riskRows(h=>coarseGet(curFrame,h,iLat,iLon))+'</div>').openOn(map);
 });
 
 /* ── Layers panel ── */
 const panel=document.getElementById('panel');
-document.getElementById('layerBtn').onclick=()=>{
-  panel.classList.toggle('show');
-  document.getElementById('layerBtn').classList.toggle('on',panel.classList.contains('show'));
-};
-function bindSw(id,init,fn){
-  const el=document.getElementById(id);
-  el.classList.toggle('on',init);
-  el.onclick=()=>{el.classList.toggle('on');fn(el.classList.contains('on'));};
-}
-bindSw('swRisk',true,on=>{riskOn=on;ovTop.setOpacity(on?riskOpac:0);});
+document.getElementById('layerBtn').onclick=()=>{panel.classList.toggle('show');
+  document.getElementById('layerBtn').classList.toggle('on',panel.classList.contains('show'));};
+function bindSw(id,init,fn){const el=document.getElementById(id);el.classList.toggle('on',init);
+  el.onclick=()=>{el.classList.toggle('on');fn(el.classList.contains('on'));};}
+bindSw('swRisk',true,on=>{riskOn=on;if(mode==='forecast')ovTop.setOpacity(on?riskOpac:0);});
 bindSw('swLabels',true,on=>{on?labels.addTo(map):map.removeLayer(labels);});
-bindSw('swCities',true,on=>{
-  citiesOn=on;
-  cityMarkers.forEach(m=>on?m.addTo(map):m.remove());
-  if(on) updateCityMarkers();
-});
-bindSw('swSatMap',false,on=>{
-  if(on){map.removeLayer(baseDark);baseSat.addTo(map);}
-  else{map.removeLayer(baseSat);baseDark.addTo(map);}
-});
-document.getElementById('riskOpac').oninput=function(){
-  riskOpac=this.value/100; if(riskOn) ovTop.setOpacity(riskOpac);};
-document.getElementById('radarOpac').oninput=function(){
-  radarOpacity=this.value/100;
-  if(radarLayers.length) radarLayers[radarIdx]?.setOpacity(radarOpacity);};
+bindSw('swCities',true,on=>{citiesOn=on;cityMarkers.forEach(m=>on?m.addTo(map):m.remove());if(on)updateCityMarkers();});
+bindSw('swSatMap',false,on=>{if(on){map.removeLayer(baseDark);baseSat.addTo(map);}else{map.removeLayer(baseSat);baseDark.addTo(map);}});
+bindSw('swRadar',true,on=>{radarUnderlay=on;paintRadar();});
+bindSw('swSatIR',false,on=>{satIROn=on;paintRadar();});
+document.getElementById('riskOpac').oninput=function(){riskOpac=this.value/100;if(riskOn&&mode==='forecast')ovTop.setOpacity(riskOpac);};
+document.getElementById('radarOpac').oninput=function(){radarOpacity=this.value/100;paintRadar();};
 
-/* ── Live radar + satellite IR (RainViewer) ── */
-let radarLayers=[], radarTimes=[], satLayers=[], satTimes=[];
-let radarTimer=null, radarIdx=0, radarOn=true, satIROn=false;
-let radarOpacity=.70, activeLayers=[], activeMode='radar';
+/* ── Radar (RainViewer) ── */
+let radarFrames=[],satFrames=[],pastCount=0,radarReady=false,radarTimer=null;
 const radarFlag=document.getElementById('radarFlag');
-const radarMode=document.getElementById('radarMode');
-const radarTimeEl=document.getElementById('radarTime');
-
-function startRadar(){
-  radarOn=true;
-  if(radarLayers.length){animateLayers('radar');return;}
+function curSet(){return satIROn?satFrames:radarFrames;}
+function radarCount(){return curSet().length;}
+function loadRadar(){
   fetch('https://api.rainviewer.com/public/weather-maps.json')
    .then(r=>r.json()).then(d=>{
      const host=d.host;
-     const past=(d.radar?.past||[]).slice(-10);
-     const now =(d.radar?.nowcast||[]).slice(0,3);
-     const frames=past.concat(now);
-     radarLayers=frames.map(fr=>L.tileLayer(
-       host+fr.path+'/256/{z}/{x}/{y}/6/1_1.png',
-       {opacity:0,pane:'radarPane',maxZoom:12}));
-     radarTimes=frames.map(fr=>fr.time);
-     radarLayers.forEach(l=>l.addTo(map));
-     // satellite IR
-     const sframes=(d.satellite?.infrared||[]).slice(-10);
-     satLayers=sframes.map(fr=>L.tileLayer(
-       host+fr.path+'/256/{z}/{x}/{y}/0/0_0.png',
-       {opacity:0,pane:'radarPane',maxZoom:12}));
-     satTimes=sframes.map(fr=>fr.time);
-     satLayers.forEach(l=>l.addTo(map));
-     animateLayers('radar');
-   }).catch(()=>{});
+     const past=(d.radar&&d.radar.past?d.radar.past:[]).slice(-10);
+     const now=(d.radar&&d.radar.nowcast?d.radar.nowcast:[]).slice(0,3);
+     pastCount=past.length;
+     radarFrames=past.concat(now).map(fr=>({time:fr.time,
+       layer:L.tileLayer(host+fr.path+'/256/{z}/{x}/{y}/6/1_1.png',
+         {opacity:0,pane:'radarPane',maxZoom:12}).addTo(map)}));
+     const ir=(d.satellite&&d.satellite.infrared?d.satellite.infrared:[]).slice(-10);
+     satFrames=ir.map(fr=>({time:fr.time,
+       layer:L.tileLayer(host+fr.path+'/256/{z}/{x}/{y}/0/0_0.png',
+         {opacity:0,pane:'radarPane',maxZoom:12}).addTo(map)}));
+     radarReady=true;
+     paintRadar();
+     if(mode==='radar')enterRadar();
+   }).catch(()=>{radarReady=false;});
 }
-function animateLayers(mode){
+function hideAllRadar(){radarFrames.forEach(f=>f.layer.setOpacity(0));satFrames.forEach(f=>f.layer.setOpacity(0));}
+function fmtTime(ts){const d=new Date(ts*1000);
+  return ('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2)+' UTC';}
+function paintRadar(){
+  // forecast underlay: show most-recent observation under the risk
+  if(mode==='forecast'){
+    hideAllRadar();
+    if(radarUnderlay&&radarReady){
+      const set=curSet();const idx=satIROn?set.length-1:Math.max(0,pastCount-1);
+      if(set[idx])set[idx].layer.setOpacity(radarOpacity*.85);
+      radarFlag.classList.add('show');
+      document.getElementById('radarMode').textContent=satIROn?'SAT IR · LATEST':'RADAR · LATEST';
+      document.getElementById('radarTime').textContent=set[idx]?fmtTime(set[idx].time):'';
+    }else radarFlag.classList.remove('show');
+  }
+}
+function enterRadar(){
+  mode='radar';
+  ovA.setOpacity(0);ovB.setOpacity(0);
+  stripEl.classList.add('hide');
+  document.getElementById('riskLegend').style.display='none';
+  document.getElementById('radarLegend').classList.add('show');
+  document.getElementById('alert').classList.remove('show');
   clearInterval(radarTimer);
-  activeMode=mode;
-  activeLayers=(mode==='sat')?satLayers:radarLayers;
-  const times  =(mode==='sat')?satTimes :radarTimes;
-  if(!activeLayers.length) return;
+  if(!radarReady||!radarCount()){
+    document.getElementById('timeMain').innerHTML='<span class="tag obs">RADAR</span>loading…';
+    return;
+  }
+  rIdx=Math.min(rIdx,radarCount()-1);
+  if(rIdx===0)rIdx=Math.max(0,pastCount-1);
+  scrub.max=radarCount()-1;
+  showRadar(rIdx);
+}
+function exitRadar(){clearInterval(radarTimer);hideAllRadar();scrub.max=N-1;}
+function showRadar(i){
+  const set=curSet();const L0=set.length;if(!L0)return;
+  rIdx=(i+L0)%L0;
+  hideAllRadar();
+  set[rIdx].layer.setOpacity(radarOpacity);
+  const nc=rIdx>=pastCount&&!satIROn;
+  document.getElementById('timeMain').innerHTML=
+    '<span class="tag obs">'+(nc?'NOWCAST':(satIROn?'SAT IR':'OBSERVED'))+'</span>'+fmtTime(set[rIdx].time);
+  document.getElementById('timeUtc').textContent=satIROn?'Infrared satellite':'Precipitation radar';
+  document.getElementById('radarMode').textContent=satIROn?'SATELLITE IR':'RADAR';
+  document.getElementById('radarTime').textContent=fmtTime(set[rIdx].time);
   radarFlag.classList.add('show');
-  radarMode.textContent=(mode==='sat')?'SATELLITE IR':'RADAR';
-  radarIdx=0;
-  radarTimer=setInterval(()=>{
-    radarLayers.forEach(l=>l.setOpacity(0));
-    satLayers.forEach(l=>l.setOpacity(0));
-    activeLayers[radarIdx]?.setOpacity(radarOpacity);
-    if(times[radarIdx]){
-      const d=new Date(times[radarIdx]*1000);
-      radarTimeEl.textContent=d.toUTCString().slice(17,22)+' UTC';
-    }
-    radarIdx=(radarIdx+1)%activeLayers.length;
-  },450);
+  scrub.max=L0-1;scrub.value=rIdx;syncHash();
 }
-function stopRadar(){
-  clearInterval(radarTimer);
-  radarLayers.forEach(l=>l.setOpacity(0));
-  satLayers.forEach(l=>l.setOpacity(0));
-  radarFlag.classList.remove('show');
-}
-bindSw('swRadar',true,on=>{radarOn=on;on?animateLayers(activeMode):stopRadar();});
-bindSw('swSatIR',false,on=>{
-  satIROn=on;
-  if(radarOn) animateLayers(on?'sat':'radar');
-});
 
 /* ── Info modal ── */
 const modal=document.getElementById('modal');
@@ -1002,29 +1044,39 @@ document.getElementById('closeBtn').onclick=()=>modal.classList.remove('show');
 modal.onclick=e=>{if(e.target===modal)modal.classList.remove('show');};
 
 /* ── Geolocation ── */
-document.getElementById('locBtn').onclick=()=>{
-  if(!navigator.geolocation) return;
+document.getElementById('locBtn').onclick=()=>{if(!navigator.geolocation)return;
   navigator.geolocation.getCurrentPosition(
     p=>map.flyTo([p.coords.latitude,p.coords.longitude],9,{duration:1.2}),
-    ()=>{},{enableHighAccuracy:true,timeout:8000});
-};
+    ()=>{},{enableHighAccuracy:true,timeout:8000});};
 
 /* ── Keyboard ── */
 document.addEventListener('keydown',e=>{
   if(e.code==='Space'){e.preventDefault();playing?stop():play();}
-  else if(e.code==='ArrowRight'){stop();showFrame(curFrame+1,true);}
-  else if(e.code==='ArrowLeft') {stop();showFrame(curFrame-1,true);}
-});
+  else if(e.code==='ArrowRight'){stop();step(1);}
+  else if(e.code==='ArrowLeft'){stop();step(-1);}});
+
+/* ── Share hash ── */
+function syncHash(){
+  const v=(mode==='radar')?('Radar/'+rIdx):(curHazard+'/'+curFrame);
+  history.replaceState(null,'','#'+v);
+}
+function restoreHash(){
+  const m=(location.hash||'').replace('#','').split('/');
+  if(m.length===2){
+    const h=decodeURIComponent(m[0]),i=parseInt(m[1])||0;
+    if(h==='Radar'){rIdx=i;return 'Radar';}
+    if(HAZARDS.includes(h)){curHazard=h;curFrame=Math.max(0,Math.min(N-1,i));return h;}
+  }
+  return null;
+}
 
 /* ── Boot ── */
-showFrame(0,false);
-startRadar();
-setTimeout(()=>{
-  if(!sessionStorage.getItem('aw_seen')){
-    modal.classList.add('show');
-    sessionStorage.setItem('aw_seen','1');
-  }
-},500);
+const want=restoreHash();
+buildStrip();
+if(want==='Radar'){highlightMode('Radar');showForecast(curFrame,false);enterRadar();}
+else{highlightMode(curHazard);showForecast(curFrame,false);}
+loadRadar();
+setTimeout(()=>{if(!sessionStorage.getItem('aw_seen')){modal.classList.add('show');sessionStorage.setItem('aw_seen','1');}},500);
 </script>
 </body>
 </html>"""
@@ -1078,8 +1130,9 @@ def main():
         if coarse_lats is None:
             coarse_lats, coarse_lons = clats, clons
         imgs = {}
-        for hz in HAZARDS:
+        for hz in DATA_HAZARDS:
             imgs[hz] = render_overlay(lats, lons, risks[hz], polys_proj, clip_path)
+        peak = {hz: int(risks[hz].max()) for hz in DATA_HAZARDS}
         day = (valid.date() - first_date).days
         frames.append({
             "f": fhour,
@@ -1089,6 +1142,7 @@ def main():
             "images": imgs,
             "city_risks": city_r,
             "coarse": coarse,
+            "peak": peak,
         })
         print("✓", end="", flush=True)
 
