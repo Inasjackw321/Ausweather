@@ -566,10 +566,27 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
   border-radius:50%;background:#5fe0f5;border:2px solid #04222e;box-shadow:0 0 7px rgba(95,224,245,.6);cursor:pointer}
 input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#5fe0f5;
   border:2px solid #04222e;cursor:pointer}
-.dayticks{display:flex;justify-content:space-between;margin-top:1px}
-.dt{font-size:8px;letter-spacing:1px;color:#3f6377;cursor:pointer;padding:2px 4px;border-radius:4px}
+.dayticks{display:flex;justify-content:space-between;margin-top:2px}
+.dt{font-size:8px;letter-spacing:1px;color:#3f6377;cursor:pointer;padding:3px 4px;border-radius:5px;text-align:center}
 .dt:hover{color:#8ac0d0;background:rgba(54,197,224,.08)}
 .dt.on{color:#5fe0f5;font-weight:700}
+.dt-label{display:block}
+.dh-dots{display:flex;justify-content:center;gap:2px;margin-top:3px}
+.dh-dot{width:7px;height:5px;border-radius:1.5px;flex:0 0 auto;opacity:.88}
+
+/* ── Daily digest panel ── */
+.digest{position:fixed;left:50%;transform:translateX(-50%);bottom:168px;z-index:600;
+  background:rgba(9,17,26,.97);border:1px solid #163450;border-radius:14px;
+  padding:12px 14px 10px;backdrop-filter:blur(12px);display:none;
+  box-shadow:0 10px 40px rgba(0,0,0,.55);min-width:300px}
+.digest.show{display:block}
+.digest h4{font-size:9px;letter-spacing:2px;color:#5a8faa;margin-bottom:9px;text-transform:uppercase}
+.dg-table{border-collapse:collapse;width:100%}
+.dg-table td,.dg-table th{padding:3px 6px;font-size:9px;text-align:center;border-radius:3px}
+.dg-table th{color:#5a8faa;letter-spacing:1px;font-weight:600;padding-bottom:5px}
+.dg-table td.lbl{text-align:left;color:#9fc4d8;font-size:10px;padding-right:10px;white-space:nowrap}
+.dg-table td.cell{font-weight:700;letter-spacing:.5px;font-size:9px;min-width:38px}
+.dg-table tr:hover td.cell{outline:1px solid rgba(255,255,255,.2)}
 
 /* ── City markers ── */
 .city-icon{background:none!important;border:none!important;overflow:visible!important}
@@ -653,18 +670,23 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   <button class="icon-btn" id="infoBtn" title="About">&#9432;</button>
   <button class="icon-btn" id="locBtn"  title="My location">&#9678;</button>
   <button class="icon-btn" id="fsBtn"   title="Fullscreen">&#9974;</button>
-  <button class="icon-btn" id="layerBtn" title="Layers">&#9783;</button>
+  <button class="icon-btn" id="digestBtn" title="5-day digest">&#9783;</button>
+  <button class="icon-btn" id="layerBtn" title="Layers">&#11052;</button>
   <div class="zoom-pair">
     <button class="icon-btn" id="zoomIn"  title="Zoom in">+</button>
     <button class="icon-btn" id="zoomOut" title="Zoom out">&#8722;</button>
   </div>
 </div>
 
+<!-- Daily digest panel -->
+<div class="digest" id="digest"></div>
+
 <!-- Radar badge -->
 <div class="radar-flag" id="radarFlag">
   <span class="dot"></span>
   <span id="radarMode">RADAR</span>
   <span class="rtime" id="radarTime"></span>
+  <span class="rtime" id="radarAge" style="opacity:.5;margin-left:2px"></span>
 </div>
 
 <!-- Layers panel -->
@@ -716,7 +738,10 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
        The bar under the timeline shows when risk peaks — click it or the day labels to jump. Click the map
        or a city for a local breakdown.</p>
     <p style="color:#8aabb8">Shortcuts: <kbd>Space</kbd> play · <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> step ·
+       <kbd>Home</kbd>/<kbd>End</kbd> first/last frame · <kbd>R</kbd> refresh radar ·
        the &#9678; button flies to your location.</p>
+    <p style="color:#8aabb8">The <b>&#9783;</b> button shows a 5-day hazard summary grid. Day-tick dots
+       below the timeline are colour-coded by peak risk per hazard. The radar loop auto-refreshes every 5 minutes.</p>
     <p style="color:#7e98a8;font-size:11px">Risk levels are computed from model fields and are
        <b>not official warnings</b>. For authoritative forecasts visit
        <a href="https://www.bom.gov.au" target="_blank" rel="noopener">bom.gov.au</a>.</p>
@@ -802,8 +827,12 @@ function highlightMode(h){
   [...hsel.children].forEach(c=>c.classList.toggle('active',c.dataset.h===h));
 }
 function selectMode(h){
-  if(h==='Radar'){enterRadar();highlightMode('Radar');return;}
-  if(mode==='radar') exitRadar();
+  if(h==='Radar'){
+    if(!playing){}else stop();
+    enterRadar();highlightMode('Radar');return;
+  }
+  if(mode==='radar'){stop();exitRadar();}
+  mode='forecast';
   curHazard=h;highlightMode(h);
   buildStrip();
   document.getElementById('riskLegend').style.display='';
@@ -823,13 +852,19 @@ function step(d){if(mode==='radar'){const n=radarCount();if(n)showRadar((rIdx+d+
 
 const dayFirst={};
 META.forEach((m,i)=>{if(!(m.day in dayFirst))dayFirst[m.day]=i;});
+const dayLabels=['TODAY','TMW','DAY 3','DAY 4','DAY 5','DAY 6'];
 function buildDayticks(){
   const wrap=document.getElementById('dayticks');
-  const names=['TODAY','TOMORROW','DAY 3','DAY 4','DAY 5','DAY 6'];
   wrap.innerHTML='';
   Object.keys(dayFirst).forEach(d=>{
     const el=document.createElement('div');el.className='dt';el.dataset.day=d;
-    el.textContent=names[d]||('DAY '+(parseInt(d)+1));
+    const label=dayLabels[parseInt(d)]||('DAY '+(parseInt(d)+1));
+    const dayFrames=META.reduce((a,m,i)=>{if(String(m.day)===String(d))a.push(i);return a;},[]);
+    const dots=DATA_HAZARDS.map(h=>{
+      const mx=dayFrames.reduce((v,i)=>Math.max(v,PROFILE[h]?.[i]||0),0);
+      return '<span class="dh-dot" style="background:'+RISK_COLORS[mx]+'" title="'+h+': '+RISK_LABELS[mx]+'"></span>';
+    }).join('');
+    el.innerHTML='<span class="dt-label">'+label+'</span><div class="dh-dots">'+dots+'</div>';
     el.onclick=()=>{if(mode==='radar')return;stop();showForecast(dayFirst[d],true);};
     wrap.appendChild(el);
   });
@@ -952,7 +987,8 @@ map.on('click',e=>{
 /* ── Layers panel ── */
 const panel=document.getElementById('panel');
 document.getElementById('layerBtn').onclick=()=>{panel.classList.toggle('show');
-  document.getElementById('layerBtn').classList.toggle('on',panel.classList.contains('show'));};
+  document.getElementById('layerBtn').classList.toggle('on',panel.classList.contains('show'));
+  digestEl.classList.remove('show');digestBtn.classList.remove('on');};
 function bindSw(id,init,fn){const el=document.getElementById(id);el.classList.toggle('on',init);
   el.onclick=()=>{el.classList.toggle('on');fn(el.classList.contains('on'));};}
 bindSw('swRisk',true,on=>{riskOn=on;if(mode==='forecast')ovTop.setOpacity(on?riskOpac:0);});
@@ -960,7 +996,7 @@ bindSw('swLabels',true,on=>{on?labels.addTo(map):map.removeLayer(labels);});
 bindSw('swCities',true,on=>{citiesOn=on;cityMarkers.forEach(m=>on?m.addTo(map):m.remove());if(on)updateCityMarkers();});
 bindSw('swSatMap',false,on=>{if(on){map.removeLayer(baseDark);baseSat.addTo(map);}else{map.removeLayer(baseSat);baseDark.addTo(map);}});
 bindSw('swRadar',true,on=>{radarUnderlay=on;paintRadar();});
-bindSw('swSatIR',false,on=>{satIROn=on;paintRadar();});
+bindSw('swSatIR',false,on=>{satIROn=on;if(mode==='radar'){rIdx=Math.min(rIdx,radarCount()-1);enterRadar();}else paintRadar();});
 document.getElementById('riskOpac').oninput=function(){riskOpac=this.value/100;if(riskOn&&mode==='forecast')ovTop.setOpacity(riskOpac);};
 document.getElementById('radarOpac').oninput=function(){radarOpacity=this.value/100;paintRadar();};
 
@@ -969,26 +1005,38 @@ let radarFrames=[],satFrames=[],pastCount=0,radarReady=false,radarTimer=null;
 const radarFlag=document.getElementById('radarFlag');
 function curSet(){return satIROn?satFrames:radarFrames;}
 function radarCount(){return curSet().length;}
+let radarLoadedAt=null;
 function loadRadar(){
   fetch('https://api.rainviewer.com/public/weather-maps.json')
    .then(r=>r.json()).then(d=>{
      const host=d.host;
-     const past=(d.radar&&d.radar.past?d.radar.past:[]).slice(-10);
+     const past=(d.radar&&d.radar.past?d.radar.past:[]).slice(-12);
      const now=(d.radar&&d.radar.nowcast?d.radar.nowcast:[]).slice(0,3);
      pastCount=past.length;
      radarFrames=past.concat(now).map(fr=>({time:fr.time,
        layer:L.tileLayer(host+fr.path+'/256/{z}/{x}/{y}/6/1_1.png',
          {opacity:0,pane:'radarPane',maxZoom:12}).addTo(map)}));
-     const ir=(d.satellite&&d.satellite.infrared?d.satellite.infrared:[]).slice(-10);
+     const ir=(d.satellite&&d.satellite.infrared?d.satellite.infrared:[]).slice(-12);
      satFrames=ir.map(fr=>({time:fr.time,
        layer:L.tileLayer(host+fr.path+'/256/{z}/{x}/{y}/0/0_0.png',
          {opacity:0,pane:'radarPane',maxZoom:12}).addTo(map)}));
      radarReady=true;
+     radarLoadedAt=Date.now();
+     document.getElementById('radarAge').textContent='Updated '+fmtTime(Math.floor(radarLoadedAt/1000));
      paintRadar();
      if(mode==='radar')enterRadar();
-   }).catch(()=>{radarReady=false;});
+   }).catch(e=>{radarReady=false;console.warn('Radar load failed:',e);
+     setTimeout(loadRadar,30000);});
 }
 function hideAllRadar(){radarFrames.forEach(f=>f.layer.setOpacity(0));satFrames.forEach(f=>f.layer.setOpacity(0));}
+function reloadRadar(){
+  radarFrames.forEach(f=>{try{map.removeLayer(f.layer);}catch(e){}});
+  satFrames.forEach(f=>{try{map.removeLayer(f.layer);}catch(e){}});
+  radarFrames=[];satFrames=[];pastCount=0;radarReady=false;
+  document.getElementById('radarAge').textContent='';
+  loadRadar();
+}
+setInterval(reloadRadar,300000);
 function fmtTime(ts){const d=new Date(ts*1000);
   return ('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2)+' UTC';}
 function paintRadar(){
@@ -1020,22 +1068,57 @@ function enterRadar(){
   if(rIdx===0)rIdx=Math.max(0,pastCount-1);
   scrub.max=radarCount()-1;
   showRadar(rIdx);
+  if(!playing)play();
 }
-function exitRadar(){clearInterval(radarTimer);hideAllRadar();scrub.max=N-1;}
+function exitRadar(){clearInterval(radarTimer);hideAllRadar();mode='forecast';scrub.max=N-1;paintRadar();}
 function showRadar(i){
   const set=curSet();const L0=set.length;if(!L0)return;
   rIdx=(i+L0)%L0;
   hideAllRadar();
   set[rIdx].layer.setOpacity(radarOpacity);
   const nc=rIdx>=pastCount&&!satIROn;
+  const tag=nc?'NOWCAST':(satIROn?'SAT IR':'OBSERVED');
+  const frameLabel='('+(rIdx+1)+'/'+L0+')';
   document.getElementById('timeMain').innerHTML=
-    '<span class="tag obs">'+(nc?'NOWCAST':(satIROn?'SAT IR':'OBSERVED'))+'</span>'+fmtTime(set[rIdx].time);
+    '<span class="tag obs">'+tag+'</span>'+fmtTime(set[rIdx].time)+
+    ' <span style="font-size:9px;color:#5a8faa;margin-left:4px">'+frameLabel+'</span>';
   document.getElementById('timeUtc').textContent=satIROn?'Infrared satellite':'Precipitation radar';
   document.getElementById('radarMode').textContent=satIROn?'SATELLITE IR':'RADAR';
   document.getElementById('radarTime').textContent=fmtTime(set[rIdx].time);
   radarFlag.classList.add('show');
   scrub.max=L0-1;scrub.value=rIdx;syncHash();
 }
+
+/* ── Daily digest panel ── */
+const digestEl=document.getElementById('digest');
+function buildDigest(){
+  const days=Object.keys(dayFirst);
+  let html='<h4>5-Day Risk Outlook</h4><table class="dg-table"><thead><tr><th></th>';
+  days.forEach(d=>{html+='<th>'+( dayLabels[parseInt(d)]||'DAY '+(parseInt(d)+1))+'</th>';});
+  html+='</tr></thead><tbody>';
+  REAL_HAZARDS.forEach(h=>{
+    html+='<tr><td class="lbl">'+(ICONS[h]||'')+' '+h+'</td>';
+    days.forEach(d=>{
+      const dayFrames=META.reduce((a,m,i)=>{if(String(m.day)===String(d))a.push(i);return a;},[]);
+      const mx=dayFrames.reduce((v,i)=>Math.max(v,PROFILE[h]?.[i]||0),0);
+      const tc=mx>=3?'#fff':mx>0?'#9fc4d8':'#3f6377';
+      html+='<td class="cell" style="background:'+RISK_COLORS[mx]+';color:'+tc+'" '+
+        'onclick="stop();showForecast(dayFirst[\''+d+'\'],true);digestEl.classList.remove(\'show\');digestBtn.classList.remove(\'on\')">'+
+        RISK_LABELS[mx]+'</td>';
+    });
+    html+='</tr>';
+  });
+  html+='</tbody></table>';
+  digestEl.innerHTML=html;
+}
+const digestBtn=document.getElementById('digestBtn');
+digestBtn.onclick=()=>{
+  const showing=digestEl.classList.toggle('show');
+  digestBtn.classList.toggle('on',showing);
+  if(showing&&!digestEl.querySelector('table'))buildDigest();
+  document.getElementById('panel').classList.remove('show');
+  document.getElementById('layerBtn').classList.remove('on');
+};
 
 /* ── Info modal ── */
 const modal=document.getElementById('modal');
@@ -1053,7 +1136,10 @@ document.getElementById('locBtn').onclick=()=>{if(!navigator.geolocation)return;
 document.addEventListener('keydown',e=>{
   if(e.code==='Space'){e.preventDefault();playing?stop():play();}
   else if(e.code==='ArrowRight'){stop();step(1);}
-  else if(e.code==='ArrowLeft'){stop();step(-1);}});
+  else if(e.code==='ArrowLeft'){stop();step(-1);}
+  else if(e.code==='Home'){stop();if(mode==='radar')showRadar(0);else showForecast(0,true);}
+  else if(e.code==='End'){stop();if(mode==='radar')showRadar(radarCount()-1);else showForecast(N-1,true);}
+  else if(e.code==='KeyR'&&!e.ctrlKey){if(mode==='radar')reloadRadar();}});
 
 /* ── Share hash ── */
 function syncHash(){
