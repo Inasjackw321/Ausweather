@@ -860,8 +860,8 @@ function buildDayticks(){
     const el=document.createElement('div');el.className='dt';el.dataset.day=d;
     const label=dayLabels[parseInt(d)]||('DAY '+(parseInt(d)+1));
     const dayFrames=META.reduce((a,m,i)=>{if(String(m.day)===String(d))a.push(i);return a;},[]);
-    const dots=DATA_HAZARDS.map(h=>{
-      const mx=dayFrames.reduce((v,i)=>Math.max(v,PROFILE[h]?.[i]||0),0);
+    const dots=HAZARDS.map(h=>{
+      const mx=dayFrames.reduce((v,i)=>Math.max(v,(PROFILE[h]&&PROFILE[h][i])||0),0);
       return '<span class="dh-dot" style="background:'+RISK_COLORS[mx]+'" title="'+h+': '+RISK_LABELS[mx]+'"></span>';
     }).join('');
     el.innerHTML='<span class="dt-label">'+label+'</span><div class="dh-dots">'+dots+'</div>';
@@ -1100,7 +1100,7 @@ function buildDigest(){
     html+='<tr><td class="lbl">'+(ICONS[h]||'')+' '+h+'</td>';
     days.forEach(d=>{
       const dayFrames=META.reduce((a,m,i)=>{if(String(m.day)===String(d))a.push(i);return a;},[]);
-      const mx=dayFrames.reduce((v,i)=>Math.max(v,PROFILE[h]?.[i]||0),0);
+      const mx=dayFrames.reduce((v,i)=>Math.max(v,(PROFILE[h]&&PROFILE[h][i])||0),0);
       const tc=mx>=3?'#fff':mx>0?'#9fc4d8':'#3f6377';
       html+='<td class="cell" style="background:'+RISK_COLORS[mx]+';color:'+tc+'" '+
         'onclick="stop();showForecast(dayFirst[\''+d+'\'],true);digestEl.classList.remove(\'show\');digestBtn.classList.remove(\'on\')">'+
